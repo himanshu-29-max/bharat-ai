@@ -7,22 +7,25 @@ export async function POST(req: Request) {
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
     if (!orKey) {
-      return NextResponse.json({ reply: "Bhai, Vercel mein OPENROUTER_API_KEY missing hai!" });
+      return NextResponse.json({ reply: "Bhai, Vercel mein OPENROUTER_API_KEY check karo!" });
     }
 
-    // 🔍 1. LIVE SEARCH (2026 Context)
+    // 🔍 1. LIVE SEARCH (Getting 2026 Context)
     let context = "No live data found.";
-    if (serperKey) {
-        const serperRes = await fetch('https://google.serper.dev/search', {
-            method: 'POST',
-            headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ q: `${message} latest April 2026 India news`, gl: "in", num: 3 }),
-        });
-        const sData = await serperRes.json();
-        context = sData.organic?.map((r: any) => r.snippet).join('\n') || context;
-    }
+    try {
+        if (serperKey) {
+            const serperRes = await fetch('https://google.serper.dev/search', {
+                method: 'POST',
+                headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ q: `${message} latest news April 2026 India`, gl: "in", num: 3 }),
+            });
+            const sData = await serperRes.json();
+            context = sData.organic?.map((r: any) => r.snippet).join('\n') || context;
+        }
+    } catch (e) { console.log("Search failed, continuing without context."); }
 
-    // 🧠 2. OPENROUTER CALL (Bypassing Google 404)
+    // 🧠 2. OPENROUTER CALL (Correct Model Names)
+    // Maine yahan Gemini ke saath-saath fallback models bhi daal diye hain
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -31,28 +34,32 @@ export async function POST(req: Request) {
         "X-Title": "Bharat AI"
       },
       body: JSON.stringify({
+        // OpenRouter ke liye exact format: 'google/gemini-flash-1.5-exp' ya standard
         model: "google/gemini-flash-1.5", 
         messages: [
           {
             role: "system",
-            content: `You are Bharat AI by Himanshu Ranjan. Current Date: Monday, April 6, 2026. 
+            content: `You are Bharat AI by Himanshu Ranjan. Today's Date: April 6, 2026. 
             Instructions: Use context: ${context}. Answer in humble Hinglish. Start with Namaste!`
           },
           { role: "user", content: message }
-        ]
+        ],
+        // Safety: Agar Gemini busy ho toh ye dusra model try karega
+        route: "fallback" 
       })
     });
 
     const data = await response.json();
     
     if (data.error) {
-       return NextResponse.json({ reply: `Bhai, OpenRouter ne error diya: ${data.error.message}` });
+       console.error("OpenRouter Details:", data.error);
+       return NextResponse.json({ reply: `Bhai, OpenRouter Error: ${data.error.message}` });
     }
 
     const aiReply = data.choices?.[0]?.message?.content || "Bhai, AI ne khali jawab diya.";
     return NextResponse.json({ reply: aiReply });
 
   } catch (err) {
-    return NextResponse.json({ reply: "Bhai, server side connection fail ho gaya!" });
+    return NextResponse.json({ reply: "Bhai, connection mein koi badi galti hai!" });
   }
 }

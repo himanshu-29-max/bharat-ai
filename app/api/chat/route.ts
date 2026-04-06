@@ -20,9 +20,9 @@ export async function POST(req: Request) {
     const sData = await serperRes.json();
     const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data found.";
 
-    // 🧠 2. DIRECT GEMINI API CALL (No SDK, No 404)
-    // Hum seedha Google ke stable v1 endpoint ko hit karenge
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${geminiKey}`;
+    // 🧠 2. DIRECT GEMINI API CALL (v1beta for 1.5-flash)
+    // Ye URL ab 100% chalega kyunki ye latest models ke liye hai
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
 
     const geminiRes = await fetch(geminiUrl, {
       method: 'POST',
@@ -42,10 +42,11 @@ export async function POST(req: Request) {
     const gData = await geminiRes.json();
 
     if (gData.error) {
-      return NextResponse.json({ reply: `Bhai, Google API Error: ${gData.error.message}` });
+       console.error("Gemini Details:", gData.error);
+       return NextResponse.json({ reply: `Bhai, Google API Error: ${gData.error.message}` });
     }
 
-    const replyText = gData.candidates[0].content.parts[0].text;
+    const replyText = gData.candidates?.[0]?.content?.parts?.[0]?.text || "Bhai, AI ne khali jawab diya!";
     return NextResponse.json({ reply: replyText });
 
   } catch (err: any) {

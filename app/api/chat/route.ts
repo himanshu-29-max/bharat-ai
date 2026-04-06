@@ -7,27 +7,27 @@ export async function POST(req: Request) {
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
     if (!geminiKey || !serperKey) {
-      return NextResponse.json({ reply: "Bhai, Vercel mein API Keys (GEMINI & SERPER) check karo!" });
+      return NextResponse.json({ reply: "Bhai, Vercel mein GEMINI_API_KEY aur SERPER_API_KEY check karo!" });
     }
 
-    // 🔍 1. LIVE SEARCH (Sabse pehle 2026 ka data uthayenge)
+    // 🔍 1. LIVE SEARCH (2026 Context)
     const serperRes = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: `${message} April 2026 news India`, gl: "in", num: 5 }),
+      body: JSON.stringify({ q: `${message} latest 2026 news India`, gl: "in", num: 5 }),
     });
     const sData = await serperRes.json();
     const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data found.";
 
-    // 🧠 2. SMART MULTI-MODEL SWITCH (Flash -> Pro -> Flash-Latest)
-    // Inme se jo bhi model active hoga, wo chal jayega
-    const models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-latest"];
+    // 🧠 2. SMART SWITCH (Stable v1 Endpoint)
+    // Humne version 'v1' use kiya hai jo zyada reliable hai
+    const models = ["gemini-1.5-flash", "gemini-pro"];
     let finalReply = "";
     let lastError = "";
 
     for (const modelName of models) {
       try {
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${geminiKey}`;
         
         const geminiRes = await fetch(geminiUrl, {
           method: 'POST',
@@ -48,10 +48,10 @@ export async function POST(req: Request) {
 
         if (gData.candidates?.[0]?.content?.parts?.[0]?.text) {
           finalReply = gData.candidates[0].content.parts[0].text;
-          break; // ✅ Success! Loop se bahar nikal jao
+          break; 
         } else {
           lastError = gData.error?.message || "Model not responding";
-          continue; // ❌ Fail! Agle model par jao
+          continue; 
         }
       } catch (err) {
         continue;
@@ -61,10 +61,10 @@ export async function POST(req: Request) {
     if (finalReply) {
       return NextResponse.json({ reply: finalReply });
     } else {
-      return NextResponse.json({ reply: `Bhai, saare Google models try kiye par error aa raha hai: ${lastError}` });
+      return NextResponse.json({ reply: `Bhai, Google mana kar raha hai: ${lastError}` });
     }
 
   } catch (err: any) {
-    return NextResponse.json({ reply: "Bhai, connection mein koi badi galti hai!" });
+    return NextResponse.json({ reply: "Bhai, connection error hai!" });
   }
 }

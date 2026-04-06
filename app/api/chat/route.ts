@@ -3,57 +3,56 @@ import { NextResponse } from 'next/server';
 export async function POST(req: Request) {
   try {
     const { message } = await req.json();
-    const geminiKey = process.env.GEMINI_API_KEY?.trim();
+    const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    if (!geminiKey || !serperKey) {
-      return NextResponse.json({ reply: "Bhai, Vercel mein Keys check karo!" });
+    if (!orKey) {
+      return NextResponse.json({ reply: "Bhai, Vercel mein OPENROUTER_API_KEY missing hai!" });
     }
 
     // 🔍 1. LIVE SEARCH (2026 Context)
-    const serperRes = await fetch('https://google.serper.dev/search', {
-      method: 'POST',
-      headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: `${message} latest news April 2026`, gl: "in", num: 3 }),
-    });
-    const sData = await serperRes.json();
-    const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data.";
+    let context = "No live data found.";
+    if (serperKey) {
+        const serperRes = await fetch('https://google.serper.dev/search', {
+            method: 'POST',
+            headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: `${message} latest April 2026 India news`, gl: "in", num: 3 }),
+        });
+        const sData = await serperRes.json();
+        context = sData.organic?.map((r: any) => r.snippet).join('\n') || context;
+    }
 
-    // 🧠 2. THE BYPASS METHOD (Using the most stable globally available URL)
-    // Hum "gemini-1.5-flash" use karenge par simplified URL ke saath
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
-
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    // 🧠 2. OPENROUTER CALL (Bypassing Google 404)
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${orKey}`,
+        "Content-Type": "application/json",
+        "X-Title": "Bharat AI"
+      },
       body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `You are Bharat AI by Himanshu Ranjan. 
-            Today's Date: Monday, April 6, 2026.
-            Context: ${context}. 
-            Task: Answer in humble Hinglish. Start with "Namaste!".
-            Question: ${message}`
-          }]
-        }]
+        model: "google/gemini-flash-1.5", 
+        messages: [
+          {
+            role: "system",
+            content: `You are Bharat AI by Himanshu Ranjan. Current Date: Monday, April 6, 2026. 
+            Instructions: Use context: ${context}. Answer in humble Hinglish. Start with Namaste!`
+          },
+          { role: "user", content: message }
+        ]
       })
     });
 
     const data = await response.json();
-
-    // 🛠️ AGAR PHIR BHI 404 AAYE, TOH YE FALLBACK CHALEGA
+    
     if (data.error) {
-       console.error("Debug Error:", data.error);
-       if (data.error.code === 404) {
-         return NextResponse.json({ reply: "Bhai, Google ka model connect nahi ho raha. Ek baar AI Studio mein jaakar naya Project bana kar nayi Key generate karo!" });
-       }
-       return NextResponse.json({ reply: `Google Error: ${data.error.message}` });
+       return NextResponse.json({ reply: `Bhai, OpenRouter ne error diya: ${data.error.message}` });
     }
 
-    const aiReply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Bhai, AI ne khali jawab diya.";
+    const aiReply = data.choices?.[0]?.message?.content || "Bhai, AI ne khali jawab diya.";
     return NextResponse.json({ reply: aiReply });
 
   } catch (err) {
-    return NextResponse.json({ reply: "Bhai, Network ka lafda hai!" });
+    return NextResponse.json({ reply: "Bhai, server side connection fail ho gaya!" });
   }
 }

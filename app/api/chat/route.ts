@@ -7,21 +7,21 @@ export async function POST(req: Request) {
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
     if (!geminiKey || !serperKey) {
-      return NextResponse.json({ reply: "Bhai, Vercel mein Keys check karo!" });
+      return NextResponse.json({ reply: "Bhai, Vercel mein GEMINI_API_KEY ya SERPER_API_KEY check karo!" });
     }
 
-    // 🔍 1. LIVE SEARCH
+    // 🔍 1. LIVE SEARCH (2026 Context)
     const serperRes = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ q: `${message} latest news April 2026`, gl: "in", num: 5 }),
     });
     const sData = await serperRes.json();
-    const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data.";
+    const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data found.";
 
-    // 🧠 2. DIRECT FETCH (Stable Version)
-    // Humne URL ko ekdum direct rakha hai bina kisi extra prefix ke
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
+    // 🧠 2. DIRECT GEMINI API CALL (Stable Model)
+    // Humne model ka naam 'gemini-pro' rakha hai jo v1 endpoint par 100% chalta hai
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${geminiKey}`;
 
     const geminiRes = await fetch(geminiUrl, {
       method: 'POST',
@@ -50,9 +50,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: gData.candidates[0].content.parts[0].text });
     }
 
-    return NextResponse.json({ reply: "Bhai, AI ne khali jawab diya. Ek baar credits check karo." });
+    return NextResponse.json({ reply: "Bhai, AI ne khali jawab diya. Ek baar AI Studio mein Key check karo." });
 
   } catch (err: any) {
-    return NextResponse.json({ reply: "Bhai, connection fail ho gaya!" });
+    return NextResponse.json({ reply: "Bhai, server side connection fail ho gaya!" });
   }
 }

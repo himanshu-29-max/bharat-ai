@@ -4,36 +4,32 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 export async function POST(req: Request) {
   try {
     const { message } = await req.json();
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY;
+    
+    const geminiKey = process.env.GEMINI_API_KEY?.trim();
+    const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    // 🔍 1. LIVE SEARCH (Serper is still the best for Google data)
+    if (!geminiKey || !serperKey) {
+      return NextResponse.json({ reply: "Bhai, Vercel mein API Keys check karo!" });
+    }
+
+    // 🔍 1. LIVE SEARCH
     const serperRes = await fetch('https://google.serper.dev/search', {
       method: 'POST',
-      headers: { 'X-API-KEY': serperKey!, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: `${message} latest 2026 India news`, gl: "in", num: 5 }),
+      headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: `${message} latest news 2026`, gl: "in", num: 5 }),
     });
     const sData = await serperRes.json();
-    const liveContext = sData.organic?.map((r: any) => `${r.title}: ${r.snippet}`).join('\n') || "No live data.";
+    const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data.";
 
-    // 🧠 2. GEMINI 1.5 FLASH (Fast & Smart)
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash",
-      generationConfig: { temperature: 0.1 } // Accuracy ke liye
-    });
+    // 🧠 2. GEMINI ENGINE (Updated Model Name)
+    const genAI = new GoogleGenerativeAI(geminiKey);
+    // Yahan humne model ka naam 'gemini-1.5-flash' ki jagah simple rakha hai jo stable hai
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" }); 
 
     const prompt = `You are Bharat AI by Himanshu Ranjan. 
-    Current Date: Monday, April 6, 2026.
-    
-    STRICT RULE:
-    - Use ONLY the following LIVE SEARCH DATA to answer. 
-    - Do NOT mention matches or events from 2023, 2024, or 2025. 
-    - If the user asks about today's or yesterday's IPL, answer only based on the data below. 
-    - Answer in humble Hinglish. Always start with "Namaste!".
-    
-    LIVE SEARCH DATA:
-    ${liveContext}
-    
+    Current Date: April 6, 2026.
+    Use this LIVE DATA: ${context}
+    Answer in humble Hinglish. Always start with Namaste!
     User Question: ${message}`;
 
     const result = await model.generateContent(prompt);
@@ -42,8 +38,11 @@ export async function POST(req: Request) {
     
     return NextResponse.json({ reply: text });
 
-  } catch (err) {
+  } catch (err: any) {
     console.error(err);
-    return NextResponse.json({ reply: "Bhai, Gemini connect nahi ho raha. Key check karo!" });
+    // Agar gemini-pro bhi na chale toh gemini-1.0-pro try karo
+    return NextResponse.json({ 
+      reply: `Bhai, Gemini error: ${err.message}` 
+    });
   }
 }

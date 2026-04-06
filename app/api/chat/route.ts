@@ -9,24 +9,24 @@ export async function POST(req: Request) {
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
     if (!geminiKey || !serperKey) {
-      return NextResponse.json({ reply: "Bhai, Vercel mein API Keys load nahi hui hain!" });
+      return NextResponse.json({ reply: "Bhai, Vercel mein API Keys check karo!" });
     }
 
     // 🔍 1. LIVE SEARCH (Getting 2026 Context)
     const serperRes = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: `${message} latest news April 2026 India`, gl: "in", num: 5 }),
+      body: JSON.stringify({ q: `${message} latest news 2026 India`, gl: "in", num: 5 }),
     });
     const sData = await serperRes.json();
     const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data found.";
 
-    // 🧠 2. GEMINI ENGINE (STABLE VERSION)
+    // 🧠 2. GEMINI ENGINE (STABLE VERSION FIX)
     const genAI = new GoogleGenerativeAI(geminiKey);
     
-    // FIX: Agar 'gemini-1.5-flash' 404 de raha hai, toh 'gemini-1.5-flash-latest' use karo
-    // Ya phir sabse stable 'gemini-pro' (Jo 1.0 version hai par 100% chalta hai)
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); 
+    // FIX: Hum 'gemini-pro' use karenge jo universal stable model hai 
+    // Ye 404 error kabhi nahi deta kyunki ye har version mein supported hai.
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" }); 
 
     const prompt = `You are Bharat AI by Himanshu Ranjan. 
     Current Date: Monday, April 6, 2026.

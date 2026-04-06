@@ -16,19 +16,20 @@ export async function POST(req: Request) {
     const serperRes = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: `${message} latest news 2026`, gl: "in", num: 5 }),
+      body: JSON.stringify({ q: `${message} latest news 2026 India`, gl: "in", num: 5 }),
     });
     const sData = await serperRes.json();
-    const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data.";
+    const context = sData.organic?.map((r: any) => r.snippet).join('\n') || "No live data found.";
 
-    // 🧠 2. GEMINI ENGINE (Updated Model Name)
+    // 🧠 2. GEMINI ENGINE
     const genAI = new GoogleGenerativeAI(geminiKey);
-    // Yahan humne model ka naam 'gemini-1.5-flash' ki jagah simple rakha hai jo stable hai
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" }); 
+    
+    // Sabse stable model version: 'gemini-1.5-flash-latest'
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); 
 
     const prompt = `You are Bharat AI by Himanshu Ranjan. 
-    Current Date: April 6, 2026.
-    Use this LIVE DATA: ${context}
+    Current Date: Monday, April 6, 2026.
+    Use this LIVE DATA to answer: ${context}
     Answer in humble Hinglish. Always start with Namaste!
     User Question: ${message}`;
 
@@ -40,9 +41,9 @@ export async function POST(req: Request) {
 
   } catch (err: any) {
     console.error(err);
-    // Agar gemini-pro bhi na chale toh gemini-1.0-pro try karo
+    // Agar ye ab bhi error de, toh model name ko "gemini-1.5-flash-latest" karke try karenge
     return NextResponse.json({ 
-      reply: `Bhai, Gemini error: ${err.message}` 
+      reply: `Bhai, Gemini connect nahi ho raha. Error: ${err.message}` 
     });
   }
 }

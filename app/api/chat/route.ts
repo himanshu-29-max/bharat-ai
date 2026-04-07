@@ -10,30 +10,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Bhai, Vercel mein API Keys check karo!" });
     }
 
-    // 📅 1. AUTO DATE (Ab ye hamesha current date uthayega)
+    // 📅 1. AUTO DATE (India Timezone)
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      timeZone: 'Asia/Kolkata'
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    // 🔍 2. LIVE SEARCH (7 April 2026 ki taaza khabar)
+    // 🔍 2. LIVE SEARCH (Context for all topics)
     const serperRes = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        q: `${message} latest news today ${aajKiDate} India`, 
-        gl: "in", 
-        tbs: "qdr:h", // Sirf pichle 1 ghante ka data
-        num: 3 
+        q: `${message} latest update ${aajKiDate} India`, 
+        gl: "in", tbs: "qdr:h", num: 3 
       }),
     });
     const sData = await serperRes.json();
     const context = sData.organic?.map((r: any) => `${r.title}: ${r.snippet}`).join('\n') || "No live data found.";
 
-    // 🧠 3. OPENROUTER CALL
+    // 🧠 3. OPENROUTER CALL (Full Markdown Support)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -46,14 +40,15 @@ export async function POST(req: Request) {
         messages: [
           {
             role: "system",
-            content: `You are Bharat AI by Himanshu Ranjan. 
-            TODAY'S DATE: ${aajKiDate}.
+            content: `You are Bharat AI by Himanshu Ranjan. Today's Date: ${aajKiDate}.
             
-            STRICT INSTRUCTIONS:
-            - Use ONLY the provided LIVE DATA for news/scores.
-            - Answer in humble Hinglish. Always start with "Namaste!".
-            - If it's Tuesday, 7 April 2026, answer accordingly.
-            - Keep responses professional yet friendly.`
+            OUTPUT RULES:
+            1. Use **Markdown Tables** for financial data or match scores.
+            2. Use **Bullet Points** for news updates.
+            3. Use **Bold** for key names, prices, or numbers.
+            4. If the user asks for code, use **Code Blocks** with language highlighting.
+            5. Always start with "Namaste!".
+            6. Language: Natural Hinglish.`
           },
           { role: "user", content: `LIVE DATA: ${context}\n\nUSER QUESTION: ${message}` }
         ]
@@ -66,6 +61,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ reply: aiReply });
 
   } catch (err) {
-    return NextResponse.json({ reply: "Bhai, network ya server ka lafda hai!" });
+    return NextResponse.json({ reply: "Bhai, server error hai!" });
   }
 }

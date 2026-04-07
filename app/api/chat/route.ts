@@ -7,24 +7,33 @@ export async function POST(req: Request) {
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
     if (!orKey || !serperKey) {
-      return NextResponse.json({ reply: "Bhai, Vercel mein Keys check karo!" });
+      return NextResponse.json({ reply: "Bhai, Vercel mein API Keys check karo!" });
     }
 
-    // 🔍 1. PURE LIVE SEARCH (No hardcoded topics)
+    // 📅 1. AUTO DATE (Ab ye hamesha current date uthayega)
+    const aajKiDate = new Date().toLocaleDateString('en-IN', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'Asia/Kolkata'
+    });
+
+    // 🔍 2. LIVE SEARCH (7 April 2026 ki taaza khabar)
     const serperRes = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        q: `${message} latest live update April 6 2026`, 
+        q: `${message} latest news today ${aajKiDate} India`, 
         gl: "in", 
-        tbs: "qdr:h", // Last 1 hour only
+        tbs: "qdr:h", // Sirf pichle 1 ghante ka data
         num: 3 
       }),
     });
     const sData = await serperRes.json();
-    const context = sData.organic?.map((r: any) => `${r.title}: ${r.snippet}`).join('\n') || "No live information found right now.";
+    const context = sData.organic?.map((r: any) => `${r.title}: ${r.snippet}`).join('\n') || "No live data found.";
 
-    // 🧠 2. OPENROUTER CALL (Aazaad AI)
+    // 🧠 3. OPENROUTER CALL
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -37,21 +46,24 @@ export async function POST(req: Request) {
         messages: [
           {
             role: "system",
-            content: `You are Bharat AI by Himanshu Ranjan. Current Date: Monday, April 6, 2026.
+            content: `You are Bharat AI by Himanshu Ranjan. 
+            TODAY'S DATE: ${aajKiDate}.
             
-            CORE INSTRUCTION:
-            - Answer ONLY using the provided LIVE DATA.
-            - Do NOT stick to any specific topic like IPL unless the user asks for it.
-            - If the user asks for Nifty, PSL, or Weather, use the search results to answer.
-            - Be natural, humble, and answer in Hinglish. Start with Namaste!`
+            STRICT INSTRUCTIONS:
+            - Use ONLY the provided LIVE DATA for news/scores.
+            - Answer in humble Hinglish. Always start with "Namaste!".
+            - If it's Tuesday, 7 April 2026, answer accordingly.
+            - Keep responses professional yet friendly.`
           },
-          { role: "user", content: `LIVE DATA FROM GOOGLE: ${context}\n\nUSER QUESTION: ${message}` }
+          { role: "user", content: `LIVE DATA: ${context}\n\nUSER QUESTION: ${message}` }
         ]
       })
     });
 
     const data = await response.json();
-    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Maaf karna bhai, data nahi mil pa raha." });
+    const aiReply = data.choices?.[0]?.message?.content || "Maaf karna bhai, data nahi mil raha.";
+    
+    return NextResponse.json({ reply: aiReply });
 
   } catch (err) {
     return NextResponse.json({ reply: "Bhai, network ya server ka lafda hai!" });

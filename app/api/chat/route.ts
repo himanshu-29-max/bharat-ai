@@ -6,40 +6,42 @@ export async function POST(req: Request) {
     const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    // 📅 1. AUTO DATE (Strictly 7 April 2026)
+    // 📅 1. AUTO DATE (Today: April 7, 2026)
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    // 🔍 2. LIVE SEARCH (Only if no image, or if user asks a question with image)
+    // 🔍 2. AGGRESSIVE LIVE SEARCH
     let searchContext = "";
-    if (message && message.length > 2) {
+    if (message && !imageBase64) {
       try {
         const sRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            q: `${message} latest update today ${aajKiDate} IPL 2026`, 
-            gl: "in", tbs: "qdr:h" 
+            // Query ko force kiya hai current price/news ke liye
+            q: `${message} NSE India current price closing April 7 2026 news`, 
+            gl: "in", 
+            tbs: "qdr:h", // Last 1 hour only
+            num: 4 
           }),
         });
         const sData = await sRes.json();
-        searchContext = sData.organic?.map((r: any) => r.snippet).join('\n') || "";
-      } catch (e) { console.log("Search error"); }
+        searchContext = sData.organic?.map((r: any) => `${r.title}: ${r.snippet}`).join('\n') || "";
+      } catch (e) { console.error("Search failed"); }
     }
 
-    // 🧠 3. AI PAYLOAD (Vision + Search Context)
+    // 🧠 3. AI INSTRUCTIONS
     const contentPayload: any = [
       { 
         type: "text", 
-        text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
+        text: `You are Bharat AI by Himanshu Ranjan. Today's Date: ${aajKiDate}.
         
         STRICT RULES:
-        - Use this LIVE DATA for current events: ${searchContext}
-        - If the user asks about today's IPL, check the live data and answer specifically for April 7, 2026.
-        - Answer in humble Hinglish. Always start with Namaste!
-        
-        User Query: ${message || "Explain this image"}` 
+        - Use ONLY this Live Data for market/news: ${searchContext}
+        - If the user asks for Nifty 50, find the latest number in the data and report it.
+        - NEVER say "data not available" if there is info in the context.
+        - Answer in humble Hinglish. Start with Namaste!` 
       }
     ];
 
@@ -57,9 +59,9 @@ export async function POST(req: Request) {
     });
 
     const data = await response.json();
-    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Data nahi mila!" });
+    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server error hai bhai!" });
 
   } catch (err) {
-    return NextResponse.json({ reply: "Bhai, connection error hai!" });
+    return NextResponse.json({ reply: "Connection fail ho gaya!" });
   }
 }

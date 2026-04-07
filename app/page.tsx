@@ -1,48 +1,47 @@
 ﻿"use client";
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Send, Plus, UserCircle, Menu, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
-export default function BharatAI() {
-  const [message, setMessage] = useState("");
-  const [chat, setChat] = useState<{ role: string; content: string; image?: string }[]>([]);
+export default function Home() {
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState([
+    { role: 'bot', content: 'Namaste! Main **Bharat AI** hoon. Bataiye main aapki kya sewa kar sakta hoon?' }
+  ]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // --- Auto Scroll ---
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: 'smooth'
-      });
-    }
-  }, [chat, isLoading]);
+  // Auto-scroll logic
+  useEffect(() => { 
+    scrollRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [messages, isLoading]);
 
+  // Image selection logic
   const handlePlusClick = () => fileInputRef.current?.click();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedImage(reader.result as string);
-        document.getElementById('main-input')?.focus();
-      };
+      reader.onloadend = () => setSelectedImage(reader.result as string);
       reader.readAsDataURL(file);
     }
   };
 
-  const sendMessage = async () => {
-    if (!message && !selectedImage) return;
+  const handleSend = async () => {
+    if ((!input.trim() && !selectedImage) || isLoading) return;
 
-    const userMsg = { role: "user", content: message, image: selectedImage || undefined };
-    setChat((prev) => [...prev, userMsg]);
+    const userMsg = input;
+    const userImg = selectedImage;
     
-    const textToSend = message;
-    const imgToSend = selectedImage;
+    // UI update for User
+    setMessages(prev => [...prev, { role: "user", content: userMsg, image: userImg || undefined }]);
     
-    setMessage("");
+    // Clear Inputs immediately
+    setInput("");
     setSelectedImage(null);
     setIsLoading(true);
 
@@ -50,118 +49,118 @@ export default function BharatAI() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: textToSend, imageBase64: imgToSend }),
+        body: JSON.stringify({ message: userMsg, imageBase64: userImg }),
       });
       const data = await res.json();
-      setChat((prev) => [...prev, { role: "assistant", content: data.reply }]);
-    } catch (e) {
-      setChat((prev) => [...prev, { role: "assistant", content: "Error aa gaya bhai!" }]);
+      setMessages(prev => [...prev, { role: "bot", content: data.reply }]);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai!" }]);
     } finally {
-      setIsLoading(false);
+      setIsLoading(true); // Small delay feel for processing
+      setTimeout(() => setIsLoading(false), 500);
     }
   };
 
   return (
-    <div className="flex flex-col h-screen bg-black text-white font-sans selection:bg-blue-500/30">
-      
-      {/* --- Main Chat Display Area --- */}
-      <div 
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-4 pt-10 pb-48 scrollbar-hide"
-      >
-        <div className="max-w-4xl mx-auto w-full">
-          {chat.length === 0 && (
-            <div className="h-[60vh] flex flex-col items-start justify-center animate-in fade-in slide-in-from-left-4 duration-1000">
-              <h1 className="text-5xl font-bold tracking-tighter mb-4 bg-gradient-to-r from-white via-gray-300 to-gray-600 bg-clip-text text-transparent">
-                Bharat AI
-              </h1>
-              <p className="text-gray-400 text-xl font-light">
-                Namaste Himanshu! How can I help you today?
-              </p>
+    <div className="flex h-screen bg-[#050505] text-white font-sans selection:bg-orange-500/30 overflow-hidden">
+      <main className="flex-1 flex flex-col relative bg-[radial-gradient(circle_at_50%_0%,#151515_0%,#050505_100%)]">
+        
+        {/* HEADER - OMNIVERSE V28 (Restored) */}
+        <header className="p-6 flex justify-between items-center border-b border-white/5 sticky top-0 z-50 bg-[#050505]/80 backdrop-blur-xl">
+          <div className="flex items-center gap-5">
+            <Menu size={22} className="opacity-40 hover:opacity-100 cursor-pointer transition-all" />
+            <div className="flex items-center gap-3 bg-white/5 px-5 py-2 rounded-full border border-white/10 shadow-inner">
+                <div className="flex flex-col rounded-sm overflow-hidden w-5 h-3.5">
+                   <div className="flex-1 bg-[#FF9933]"></div>
+                   <div className="flex-1 bg-white flex items-center justify-center p-[0.2px]"><div className="w-[1px] h-[1px] rounded-full border-[0.2px] border-blue-900"></div></div>
+                   <div className="flex-1 bg-[#138808]"></div>
+                </div>
+                <span className="text-[11px] font-black tracking-[0.3em] uppercase opacity-70">OMNIVERSE V28</span>
             </div>
-          )}
+          </div>
+          <div className="flex items-center gap-4">
+             <div className="hidden sm:block text-[10px] font-black text-white/20 tracking-widest uppercase">Himanshu Ranjan Edition</div>
+             <UserCircle size={32} className="opacity-20 hover:opacity-100 transition-all cursor-pointer" />
+          </div>
+        </header>
 
-          {chat.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-10`}>
-              <div className={`p-5 rounded-2xl max-w-[85%] transition-all ${
-                msg.role === 'user' 
-                ? 'bg-[#111] border border-gray-800 shadow-2xl text-gray-100' 
-                : 'bg-transparent text-gray-200 border-l-2 border-gray-800 ml-2'
+        {/* CHAT AREA */}
+        <div className="flex-1 overflow-y-auto px-6 md:px-[20%] lg:px-[25%] space-y-12 py-12 scrollbar-hide pb-60">
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-4 duration-500`}>
+              <div className={`max-w-[95%] p-7 rounded-[2.5rem] shadow-2xl transition-all ${
+                m.role === 'user' 
+                ? 'bg-white text-black font-extrabold shadow-[0_15px_50px_rgba(255,255,255,0.05)]' 
+                : 'bg-[#0d0d0d] border border-white/10 backdrop-blur-sm'
               }`}>
-                {msg.image && (
-                  <img 
-                    src={msg.image} 
-                    className="w-80 rounded-xl mb-4 border border-gray-800 shadow-2xl hover:scale-[1.01] transition-transform" 
-                    alt="Upload" 
-                  />
-                )}
-                <div className="prose prose-invert max-w-none text-[17px] leading-relaxed">
-                  {msg.content}
+                {/* @ts-ignore - Dynamic image support in user bubble */}
+                {m.image && <img src={m.image} className="w-64 rounded-2xl mb-4 border-2 border-black/10" alt="Upload" />}
+                <div className={`prose prose-invert max-w-none text-[17px] leading-relaxed ${m.role === 'user' ? 'text-black' : 'text-white/90'}`}>
+                  <ReactMarkdown>{m.content}</ReactMarkdown>
                 </div>
               </div>
             </div>
           ))}
           {isLoading && (
-            <div className="flex justify-start mb-10 animate-pulse ml-2">
-              <div className="text-gray-600 text-sm italic">Bharat AI is thinking...</div>
+            <div className="flex items-center gap-3 ml-4 animate-pulse">
+              <div className="flex gap-1.5">
+                <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-bounce"></div>
+                <div className="w-1.5 h-1.5 bg-white rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+              </div>
+              <span className="text-[10px] font-black tracking-[0.5em] text-white/30 uppercase">BHARAT AI PROCESSING...</span>
             </div>
           )}
+          <div ref={scrollRef} className="h-10" />
         </div>
-      </div>
 
-      {/* --- Bottom Area: Input Bar + Branding --- */}
-      <div className="fixed bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black via-black/95 to-transparent">
-        <div className="max-w-3xl mx-auto w-full flex flex-col items-center">
-          
-          {/* Image Preview */}
-          {selectedImage && (
-            <div className="absolute -top-24 left-0 p-2 bg-[#0a0a0a] border border-gray-800 rounded-2xl shadow-[0_0_20px_rgba(255,255,255,0.05)] animate-in slide-in-from-bottom-4">
-              <img src={selectedImage} className="w-16 h-16 object-cover rounded-xl" alt="Preview" />
+        {/* FLOATING INPUT DOCK */}
+        <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-[#050505] via-[#050505]/95 to-transparent flex flex-col items-center">
+          <div className="max-w-4xl w-full relative group">
+            
+            {/* Image Preview Area */}
+            {selectedImage && (
+              <div className="absolute -top-24 left-4 p-2 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-4">
+                <img src={selectedImage} className="w-16 h-16 object-cover rounded-xl" alt="Preview" />
+                <button onClick={() => setSelectedImage(null)} className="absolute -top-2 -right-2 bg-red-600 p-1 rounded-full text-white"><X size={12}/></button>
+              </div>
+            )}
+
+            <div className="absolute -inset-1 bg-gradient-to-r from-orange-600 via-white to-green-600 rounded-[2.5rem] blur opacity-5 group-focus-within:opacity-15 transition duration-1000"></div>
+            
+            <div className="relative flex items-center bg-[#0d0d0d] border border-white/10 rounded-[3rem] p-3 shadow-[0_20px_50px_rgba(0,0,0,0.5)] focus-within:border-white/30 transition-all backdrop-blur-3xl">
               <button 
-                onClick={() => setSelectedImage(null)} 
-                className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold border border-black"
+                onClick={handlePlusClick}
+                className="p-4 text-white/20 hover:text-white transition-all active:scale-90"
               >
-                ✕
+                <Plus size={24} />
+              </button>
+              
+              <input 
+                type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" 
+              />
+
+              <input 
+                value={input} 
+                onChange={(e) => setInput(e.target.value)} 
+                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                placeholder="Ask Bharat anything..." 
+                className="flex-1 bg-transparent border-none focus:ring-0 text-lg px-4 outline-none placeholder:text-white/10 text-white"
+              />
+              
+              <button onClick={handleSend} className="bg-white text-black p-4 rounded-full shadow-2xl hover:scale-105 active:scale-95 transition-all">
+                <Send size={20} />
               </button>
             </div>
-          )}
-
-          {/* Search Box with Light/Glow Effect */}
-          <div className="w-full flex items-center bg-[#0a0a0a] border border-gray-800 rounded-[30px] px-6 py-4 focus-within:border-gray-500 focus-within:shadow-[0_0_25px_rgba(255,255,255,0.03)] shadow-xl transition-all duration-500 group">
-            <button 
-              onClick={handlePlusClick} 
-              className="text-gray-500 hover:text-white transition-colors p-1 mr-3 active:scale-90"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            </button>
-            
-            <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" />
-
-            <input 
-              id="main-input"
-              value={message} 
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-              placeholder="Ask Bharat anything..."
-              className="flex-1 bg-transparent border-none outline-none text-gray-100 placeholder-gray-600 text-[16px] py-1"
-            />
-
-            <button 
-              onClick={sendMessage} 
-              className="bg-white text-black p-2 rounded-full w-10 h-10 flex items-center justify-center hover:bg-gray-200 active:scale-90 transition-all ml-3 shadow-[0_0_15px_rgba(255,255,255,0.1)]"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-            </button>
           </div>
-
-          {/* --- Branding Section --- */}
-          <div className="mt-4 pb-2">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-gray-600 font-medium select-none">
-              Developed by <span className="text-gray-400">Himanshu Ranjan</span>
-            </p>
+          
+          <div className="mt-8 text-center">
+             <p className="text-[10px] font-black tracking-[0.8em] uppercase text-white/10 transition-all cursor-default hover:text-white/30">
+                Developed by Himanshu Ranjan
+             </p>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

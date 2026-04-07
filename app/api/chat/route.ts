@@ -11,7 +11,7 @@ export async function POST(req: Request) {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    // 🔍 2. PRECISE LIVE SEARCH (Removing old match noise)
+    // 🔍 2. DYNAMIC LIVE SEARCH (Keyword Based)
     let searchContext = "";
     if (message && !imageBase64) {
       try {
@@ -19,8 +19,8 @@ export async function POST(req: Request) {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            // Query ko force kiya hai aaj ke specific match aur score ke liye
-            q: `IPL match today live scorecard 7 April 2026 RR vs MI toss result`, 
+            // Query ko force kiya hai strictly user ke question par
+            q: `${message} NSE India live update ${aajKiDate} current price`, 
             gl: "in", 
             tbs: "qdr:h", // Sirf pichle 1 ghante ka fresh data
             num: 2 
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Search failed"); }
     }
 
-    // 🧠 3. AI PROMPT (Strict context enforcement)
+    // 🧠 3. AI PROMPT (Strict Answer Policy)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${orKey}`, "Content-Type": "application/json" },
@@ -40,13 +40,14 @@ export async function POST(req: Request) {
         messages: [{
           role: "user",
           content: [
-            { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
+            { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today's Date: ${aajKiDate}.
             
             STRICT RULES:
-            - Use ONLY the latest info from this data: ${searchContext}
-            - IGNORE any scores related to KKR or PBKS from yesterday.
-            - If it's before 7:30 PM, focus on the Toss result for RR vs MI.
-            - Answer DIRECTLY and in humble Hinglish. Start with Namaste!` },
+            - User asked about: "${message}".
+            - Answer ONLY based on this Live Data: ${searchContext}
+            - If the user asks about Bank Nifty, do NOT talk about Cricket or IPL.
+            - Give the exact closing or current price from the data.
+            - Answer in humble Hinglish. Start with Namaste!` },
             ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
           ]
         }]
@@ -54,9 +55,9 @@ export async function POST(req: Request) {
     });
 
     const data = await response.json();
-    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server error!" });
+    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server busy hai bhai!" });
 
   } catch (err) {
-    return NextResponse.json({ reply: "Connection fail ho gaya!" });
+    return NextResponse.json({ reply: "Connection error!" });
   }
 }

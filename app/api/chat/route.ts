@@ -6,12 +6,12 @@ export async function POST(req: Request) {
     const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    // 📅 1. AUTO DATE (Today: April 7, 2026)
+    // 📅 1. Aaj ki Date (Tuesday, 7 April 2026)
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    // 🔍 2. AGGRESSIVE LIVE SEARCH
+    // 🔍 2. LIVE SEARCH (Targeting Toss & Match Info)
     let searchContext = "";
     if (message && !imageBase64) {
       try {
@@ -19,11 +19,8 @@ export async function POST(req: Request) {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            // Query ko force kiya hai current price/news ke liye
-            q: `${message} NSE India current price closing April 7 2026 news`, 
-            gl: "in", 
-            tbs: "qdr:h", // Last 1 hour only
-            num: 4 
+            q: `IPL match today toss winner playing XI ${aajKiDate} live update`, 
+            gl: "in", tbs: "qdr:h", num: 3 
           }),
         });
         const sData = await sRes.json();
@@ -31,37 +28,33 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Search failed"); }
     }
 
-    // 🧠 3. AI INSTRUCTIONS
-    const contentPayload: any = [
-      { 
-        type: "text", 
-        text: `You are Bharat AI by Himanshu Ranjan. Today's Date: ${aajKiDate}.
-        
-        STRICT RULES:
-        - Use ONLY this Live Data for market/news: ${searchContext}
-        - If the user asks for Nifty 50, find the latest number in the data and report it.
-        - NEVER say "data not available" if there is info in the context.
-        - Answer in humble Hinglish. Start with Namaste!` 
-      }
-    ];
-
-    if (imageBase64) {
-      contentPayload.push({ type: "image_url", image_url: { url: imageBase64 } });
-    }
-
+    // 🧠 3. AI PROMPT (Strict Answer Policy)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${orKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-2.0-flash-001", 
-        messages: [{ role: "user", content: contentPayload }]
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
+            
+            STRICT RULES:
+            - Answer the user's question DIRECTLY using this live data: ${searchContext}
+            - Do NOT just say "Namaste, how can I help". 
+            - If the user asks about the Toss, tell them which team won the toss based on the data.
+            - If data is not clear, give the most recent match update for April 7, 2026.
+            - Answer in humble Hinglish.` },
+            ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
+          ]
+        }]
       })
     });
 
     const data = await response.json();
-    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server error hai bhai!" });
+    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server busy hai bhai!" });
 
   } catch (err) {
-    return NextResponse.json({ reply: "Connection fail ho gaya!" });
+    return NextResponse.json({ reply: "Connection error!" });
   }
 }

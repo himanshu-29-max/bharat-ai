@@ -11,29 +11,26 @@ export async function POST(req: Request) {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    // 🔍 1. PRECISE LIVE SEARCH (Triggered on almost everything except 1-word hi)
+    // 🔍 1. LIVE SEARCH
     let searchContext = "";
     const cleanMsg = message?.trim() || "";
     
-    // Agar message 1 word se bada hai ya usme news/haal/samachar jaise words hain, toh SEARCH KARO
-    const needsSearch = cleanMsg.split(/\s+/).length > 1 || /news|haal|samachar|update|score|price|ipl|nifty/i.test(cleanMsg);
-
-    if (cleanMsg && !imageBase64 && needsSearch) {
+    if (cleanMsg && !imageBase64 && cleanMsg.length > 2) {
       try {
         const sRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            q: `${cleanMsg} India latest news today ${aajKiDate}`, 
+            q: `${cleanMsg} latest India news today ${aajKiDate}`, 
             gl: "in", tbs: "qdr:h", num: 5 
           }),
         });
         const sData = await sRes.json();
         searchContext = sData.organic?.map((r: any) => `${r.title}: ${r.snippet}`).join('\n') || "";
-      } catch (e) { console.error("Serper error"); }
+      } catch (e) { console.error("Search error"); }
     }
 
-    // 🧠 2. AI PAYLOAD (Strict Answer-Only Mode)
+    // 🧠 2. AI PROMPT (Strict Natural Hinglish)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${orKey}`, "Content-Type": "application/json" },
@@ -44,12 +41,12 @@ export async function POST(req: Request) {
           content: [
             { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
             
-            STRICT RULES:
-            - If the user asks "Kya haal samachar h", use this Live News to give a summary: ${searchContext}
-            - NEVER just say "Main aapki kaise madad kar sakta hoon" if the user asks for news or status.
-            - Answer the user's intent DIRECTLY.
-            - Don't talk about rules or instructions.
-            - Use natural, friendly Hinglish. Start with Namaste!` },
+            STRICT STYLE RULES:
+            - Answer the user's question using this data: ${searchContext}
+            - Use NATURAL HINGLISH. Avoid heavy Sanskrit/Urdu words.
+            - Example: Use "Strait" instead of "Jaladamrumadhya", "Meeting" instead of "Shirkat", "Price" instead of "Bhav".
+            - Talk like a normal Indian friend. Keep it short and crisp.
+            - Start with a simple "Namaste!".` },
             ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
           ]
         }]
@@ -57,7 +54,7 @@ export async function POST(req: Request) {
     });
 
     const data = await response.json();
-    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Net slow hai bhai!" });
+    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Net ka chakkar hai bhai!" });
 
   } catch (err) {
     return NextResponse.json({ reply: "Connection failed!" });

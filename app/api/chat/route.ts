@@ -11,18 +11,18 @@ export async function POST(req: Request) {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    // 🔍 2. CONDITIONAL SEARCH (Sirf kaam ki baat par search hoga)
+    // 🔍 2. FORCE SEARCH (Agar message "hi" se bada hai, toh search hoga hi hoga)
     let searchContext = "";
-    const isGreeting = /^(hi|hello|hey|namaste|hola)$/i.test(message?.trim());
-
-    if (message && !imageBase64 && !isGreeting) {
+    const cleanMsg = message?.trim().toLowerCase();
+    
+    if (cleanMsg && !imageBase64 && cleanMsg.length > 3) {
       try {
         const sRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            q: `${message} latest official update ${aajKiDate}`, 
-            gl: "in", tbs: "qdr:h", num: 3 
+            q: `${message} India live price news ${aajKiDate}`, 
+            gl: "in", tbs: "qdr:h", num: 4 
           }),
         });
         const sData = await sRes.json();
@@ -42,10 +42,11 @@ export async function POST(req: Request) {
             { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
             
             STRICT RULES:
-            1. If the user says "hi" or "hello", just greet them humbly and ask how you can help. Do NOT give any stock or market data on your own.
-            2. Only use this Live Data if the user asks a specific question: ${searchContext}
-            3. Answer precisely what is asked. If asked about Nifty, don't talk about Reliance.
-            4. Answer in humble Hinglish. Start with Namaste!` },
+            1. If the user asks a specific question like "Bank Nifty" or "IPL", you MUST use this Live Data to answer: ${searchContext}
+            2. DO NOT just give a general greeting. Answer the question FIRST, then you can be polite.
+            3. If the user only says "hi", then only give a greeting.
+            4. If data is available, give exact numbers/prices.
+            5. Answer in humble Hinglish. Always start with Namaste!` },
             ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
           ]
         }]

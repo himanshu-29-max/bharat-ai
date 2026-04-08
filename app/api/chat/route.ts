@@ -6,26 +6,25 @@ export async function POST(req: Request) {
     const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    // 📅 1. Date (Wednesday, 8 April 2026)
+    // 📅 1. Wednesday, 8 April 2026
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    // 🔍 2. STRICT CONDITIONAL SEARCH
+    // 🔍 2. DYNAMIC LIVE SEARCH
     let searchContext = "";
-    const cleanMsg = message?.trim().toLowerCase();
-    
-    // Sirf tab search karo jab sawal "hi/hello" na ho aur length 3 se zyada ho
-    const isGreeting = /^(hi|hello|hey|namaste|नमस्ते|hola|hii|hiii)$/i.test(cleanMsg);
+    const cleanMsg = message?.trim() || "";
+    const wordCount = cleanMsg.split(/\s+/).length;
 
-    if (cleanMsg && !imageBase64 && !isGreeting && cleanMsg.length > 3) {
+    // Agar message 2 words se bada hai, toh Search pakka hoga
+    if (cleanMsg && !imageBase64 && wordCount > 1) {
       try {
         const sRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            q: `IPL match today April 8 2026 schedule live teams`, 
-            gl: "in", tbs: "qdr:d", num: 3 
+            q: `${cleanMsg} NSE India live market news ${aajKiDate}`, 
+            gl: "in", tbs: "qdr:h", num: 4 
           }),
         });
         const sData = await sRes.json();
@@ -33,7 +32,7 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Search failed"); }
     }
 
-    // 🧠 3. AI PROMPT (Strict Answer Policy)
+    // 🧠 3. AI PROMPT (Action-First Policy)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${orKey}`, "Content-Type": "application/json" },
@@ -45,11 +44,10 @@ export async function POST(req: Request) {
             { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
             
             STRICT RULES:
-            1. If the user just says "Hi" or any greeting, ONLY say: "Namaste! Main Bharat AI hoon. Main aapki kaise madad kar sakta hoon?"
-            2. NEVER give match or stock data on a greeting.
-            3. If a question is asked, use this FRESH data: ${searchContext}
-            4. Verify team names carefully. If today is April 8, 2026, and the match is DC vs GT, only say that.
-            5. Answer in natural Hinglish. Always start with Namaste!` },
+            1. If the user message is just a greeting (e.g., "Hi", "Hello"), greet them back humbly.
+            2. If the user asks ANY question (e.g., "Nifty kitne pe start hua", "IPL toss"), you MUST use this Live Data: ${searchContext}
+            3. Do NOT say "Main aapki kaise madad kar sakta hoon" if a question is already asked. Give the ANSWER first.
+            4. Answer in humble Hinglish. Always start with Namaste!` },
             ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
           ]
         }]

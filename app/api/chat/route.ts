@@ -6,24 +6,25 @@ export async function POST(req: Request) {
     const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    // 📅 Today's Date: Thursday, 9 April 2026
+    // 📅 Aaj ki Date: Friday, 10 April 2026
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
     const cleanMsg = message?.trim() || "";
-    const isJustGreeting = /^(hi|hello|hey|namaste|नमस्ते|hola|hii|hiii)$/i.test(cleanMsg);
-
-    // 🔍 1. CONDITIONAL SEARCH (Only search if it's NOT a greeting)
+    
+    // 🔍 1. PRECISE SEARCH (Only trigger for questions)
     let searchContext = "";
-    if (cleanMsg && !imageBase64 && !isJustGreeting && cleanMsg.length > 2) {
+    const isGreeting = /^(hi|hello|hey|namaste|नमस्ते|hola|hii)$/i.test(cleanMsg.toLowerCase());
+
+    if (cleanMsg && !imageBase64 && !isGreeting && cleanMsg.length > 2) {
       try {
         const sRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            q: `${cleanMsg} latest news India today ${aajKiDate}`, 
-            gl: "in", tbs: "qdr:h", num: 4 
+            q: `${cleanMsg} IPL match today April 10 2026 schedule live`, 
+            gl: "in", tbs: "qdr:d", num: 3 
           }),
         });
         const sData = await sRes.json();
@@ -31,7 +32,7 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Search failed"); }
     }
 
-    // 🧠 2. AI PROMPT (Strict Compliance)
+    // 🧠 2. AI PROMPT (Direct & Natural)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${orKey}`, "Content-Type": "application/json" },
@@ -42,11 +43,12 @@ export async function POST(req: Request) {
           content: [
             { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
             
-            STRICT RESPONSE RULES:
-            1. If the user message is just a greeting (like Hi, Hello), ONLY say: "Namaste! Main Bharat AI hoon. Main aapki kaise madad kar sakta hoon?"
-            2. NEVER give news, stock, or match data on a greeting unless explicitly asked.
-            3. If a specific question is asked, use this Live Data to answer directly: ${searchContext}
-            4. Use natural Hinglish. Don't be robotic or over-enthusiastic.` },
+            RULES:
+            - Answer the user DIRECTLY. 
+            - NEVER mention "instructions", "rules", or "responding according to guidelines".
+            - If it's a question about IPL/News, use this: ${searchContext}
+            - If it's a greeting, just say Namaste.
+            - Speak in humble Hinglish. Always start with Namaste!` },
             ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
           ]
         }]

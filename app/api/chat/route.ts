@@ -6,25 +6,25 @@ export async function POST(req: Request) {
     const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    // 📅 Aaj ki Date: Friday, 10 April 2026
+    // 📅 Today's Date: Sunday, 12 April 2026
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
     const cleanMsg = message?.trim() || "";
-    
-    // 🔍 1. PRECISE SEARCH (Only trigger for questions)
-    let searchContext = "";
-    const isGreeting = /^(hi|hello|hey|namaste|नमस्ते|hola|hii)$/i.test(cleanMsg.toLowerCase());
+    const words = cleanMsg.split(/\s+/);
 
-    if (cleanMsg && !imageBase64 && !isGreeting && cleanMsg.length > 2) {
+    // 🔍 1. FORCE LIVE SEARCH
+    let searchContext = "";
+    // Agar message 1 word se bada hai (jaise "konsa match") toh SEARCH pakka hoga
+    if (cleanMsg && !imageBase64 && words.length > 1) {
       try {
         const sRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            q: `${cleanMsg} IPL match today April 10 2026 schedule live`, 
-            gl: "in", tbs: "qdr:d", num: 3 
+            q: `${cleanMsg} today ${aajKiDate} live updates`, 
+            gl: "in", tbs: "qdr:h", num: 4 
           }),
         });
         const sData = await sRes.json();
@@ -32,7 +32,7 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Search failed"); }
     }
 
-    // 🧠 2. AI PROMPT (Direct & Natural)
+    // 🧠 2. AI PROMPT (Strict Answer Policy)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${orKey}`, "Content-Type": "application/json" },
@@ -43,12 +43,11 @@ export async function POST(req: Request) {
           content: [
             { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today is ${aajKiDate}.
             
-            RULES:
-            - Answer the user DIRECTLY. 
-            - NEVER mention "instructions", "rules", or "responding according to guidelines".
-            - If it's a question about IPL/News, use this: ${searchContext}
-            - If it's a greeting, just say Namaste.
-            - Speak in humble Hinglish. Always start with Namaste!` },
+            STRICT RULES:
+            1. If search context is available, use it to answer the question DIRECTLY.
+            2. Never just say "Namaste" and stop. If a question is asked, give the answer immediately.
+            3. If user asks "aaj konsa match h", tell them the IPL matches for today (April 12, 2026).
+            4. Answer in natural Hinglish. Start with a humble Namaste.` },
             ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
           ]
         }]
@@ -56,7 +55,7 @@ export async function POST(req: Request) {
     });
 
     const data = await response.json();
-    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server error!" });
+    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Net slow hai bhai!" });
 
   } catch (err) {
     return NextResponse.json({ reply: "Connection failed!" });

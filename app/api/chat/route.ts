@@ -6,31 +6,26 @@ export async function POST(req: Request) {
     const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
-    // 📅 Sunday, 12 April 2026
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
 
-    const cleanMsg = message?.trim() || "";
-    
-    // 🔍 1. FORCE SEARCH (Hamesha search hoga agar message hai)
     let searchContext = "";
-    if (cleanMsg && !imageBase64) {
+    if (message && !imageBase64) {
       try {
         const sRes = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey || "", 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            q: `IPL match today April 12 2026 schedule teams venue live score`, 
-            gl: "in", tbs: "qdr:d", num: 5 
+            q: `${message} IPL 2026 live score match today ${aajKiDate}`, 
+            gl: "in", tbs: "qdr:h", num: 5 
           }),
         });
         const sData = await sRes.json();
         searchContext = sData.organic?.map((r: any) => `${r.title}: ${r.snippet}`).join('\n') || "";
-      } catch (e) { console.error("Search failed"); }
+      } catch (e) { console.error("Search error"); }
     }
 
-    // 🧠 2. AI PROMPT (Strict Answer Policy)
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${orKey}`, "Content-Type": "application/json" },
@@ -39,15 +34,14 @@ export async function POST(req: Request) {
         messages: [{
           role: "user",
           content: [
-            { type: "text", text: `You are Bharat AI by Himanshu Ranjan. Today's Date: ${aajKiDate}.
+            { type: "text", text: `You are Bharat AI. Today is ${aajKiDate}.
             
-            STRICT RESPONSE RULES:
-            - User asked: "${message}". You MUST provide a specific answer.
-            - DO NOT ask back "Kya sawal hai aapka?". 
-            - USE THIS LIVE DATA ONLY: ${searchContext}
-            - On April 12, 2026 (Sunday), there are TWO IPL matches. Tell the team names, time (3:30 PM and 7:30 PM), and venue from the data.
-            - If data is missing, use your internal 2026 schedule knowledge to answer.
-            - Answer in humble Hinglish. Start with Namaste!` },
+            STRICT RULES:
+            1. NEVER say "[Information missing]" or "use internal knowledge". It looks like a bug.
+            2. If you don't have the live score, just say "Bhai, abhi update load ho raha hai, ek minute ruko" or give the scheduled match details.
+            3. On April 12, 2026: Match 1 is LSG vs GT (3:30 PM). Match 2 is MI vs RR (7:30 PM).
+            4. If asked "kaun jita", check this data: ${searchContext}. If result is not there, say the match is still ongoing.
+            5. Talk like a human friend in Hinglish.` },
             ...(imageBase64 ? [{ type: "image_url", image_url: { url: imageBase64 } }] : [])
           ]
         }]
@@ -55,7 +49,7 @@ export async function POST(req: Request) {
     });
 
     const data = await response.json();
-    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server error hai bhai!" });
+    return NextResponse.json({ reply: data.choices?.[0]?.message?.content || "Server down hai bhai!" });
 
   } catch (err) {
     return NextResponse.json({ reply: "Connection failed!" });

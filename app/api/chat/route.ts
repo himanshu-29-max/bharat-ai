@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { message, imageBase64 } = await req.json();
+    const { message, imageBase64, history = [] } = await req.json();
     const orKey = process.env.OPENROUTER_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
 
@@ -13,7 +13,6 @@ export async function POST(req: Request) {
 
     const cleanMsg = message?.trim() || "";
 
-    // Smart search — India news sirf news queries pe lagao
     const isNewsQuery = /(news|aaj|today|latest|abhi|current|price|rate|score|match|result|election|weather)/i.test(cleanMsg);
     const searchQuery = isNewsQuery
       ? `${cleanMsg} India ${new Date().getFullYear()}`
@@ -32,7 +31,6 @@ export async function POST(req: Request) {
         });
         const sData = await sRes.json();
         const results = sData.organic?.slice(0, 5) || [];
-
         if (results.length > 0) {
           searchContext = results
             .map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`)
@@ -53,6 +51,7 @@ RULES:
 - Agar search data relevant nahi hai ya nahi mila, toh apni knowledge se jawab de — lekin clearly bol "Meri knowledge ke basis pe:".
 - Kabhi bhi galat ya made-up information mat dena.
 - Agar kuch pata nahi, bol do "Mujhe is baare mein pakka pata nahi."
+- Conversation ka context yaad rakho — agar user "ye", "woh", "iska" jaise words use kare toh pichli baaton se samjho.
 - Har jawab Namaste! se shuru karo.`;
 
     const userContent: any[] = [];
@@ -86,6 +85,7 @@ RULES:
         model: "google/gemini-2.0-flash-001",
         messages: [
           { role: "system", content: systemPrompt },
+          ...history.slice(-6),
           { role: "user", content: userContent }
         ],
         max_tokens: 1200,

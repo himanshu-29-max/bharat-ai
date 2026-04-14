@@ -8,18 +8,17 @@ export default function Home() {
   const [messages, setMessages] = useState([
     { role: 'bot', content: 'Namaste! Main **Bharat AI** hoon. Bataiye main aapki kya sewa kar sakta hoon?' }
   ]);
+  const [history, setHistory] = useState<{role: string, content: string}[]>([]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll logic
   useEffect(() => { 
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' }); 
   }, [messages, isLoading]);
 
-  // Image selection logic
   const handlePlusClick = () => fileInputRef.current?.click();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -37,10 +36,7 @@ export default function Home() {
     const userMsg = input;
     const userImg = selectedImage;
     
-    // UI update for User
     setMessages(prev => [...prev, { role: "user", content: userMsg, image: userImg || undefined }]);
-    
-    // Clear Inputs immediately
     setInput("");
     setSelectedImage(null);
     setIsLoading(true);
@@ -49,14 +45,25 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMsg, imageBase64: userImg }),
+        body: JSON.stringify({ 
+          message: userMsg, 
+          imageBase64: userImg,
+          history: history
+        }),
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: "bot", content: data.reply }]);
+      
+      // History update
+      setHistory(prev => [
+        ...prev,
+        { role: "user", content: userMsg },
+        { role: "assistant", content: data.reply }
+      ]);
     } catch (err) {
       setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai!" }]);
     } finally {
-      setIsLoading(true); // Small delay feel for processing
+      setIsLoading(true);
       setTimeout(() => setIsLoading(false), 500);
     }
   };
@@ -65,7 +72,7 @@ export default function Home() {
     <div className="flex h-screen bg-[#050505] text-white font-sans selection:bg-orange-500/30 overflow-hidden">
       <main className="flex-1 flex flex-col relative bg-[radial-gradient(circle_at_50%_0%,#151515_0%,#050505_100%)]">
         
-        {/* HEADER - OMNIVERSE V28 (Restored) */}
+        {/* HEADER */}
         <header className="p-6 flex justify-between items-center border-b border-white/5 sticky top-0 z-50 bg-[#050505]/80 backdrop-blur-xl">
           <div className="flex items-center gap-5">
             <Menu size={22} className="opacity-40 hover:opacity-100 cursor-pointer transition-all" />
@@ -93,7 +100,7 @@ export default function Home() {
                 ? 'bg-white text-black font-extrabold shadow-[0_15px_50px_rgba(255,255,255,0.05)]' 
                 : 'bg-[#0d0d0d] border border-white/10 backdrop-blur-sm'
               }`}>
-                {/* @ts-ignore - Dynamic image support in user bubble */}
+                {/* @ts-ignore */}
                 {m.image && <img src={m.image} className="w-64 rounded-2xl mb-4 border-2 border-black/10" alt="Upload" />}
                 <div className={`prose prose-invert max-w-none text-[17px] leading-relaxed ${m.role === 'user' ? 'text-black' : 'text-white/90'}`}>
                   <ReactMarkdown>{m.content}</ReactMarkdown>
@@ -118,7 +125,6 @@ export default function Home() {
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-[#050505] via-[#050505]/95 to-transparent flex flex-col items-center">
           <div className="max-w-4xl w-full relative group">
             
-            {/* Image Preview Area */}
             {selectedImage && (
               <div className="absolute -top-24 left-4 p-2 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-4">
                 <img src={selectedImage} className="w-16 h-16 object-cover rounded-xl" alt="Preview" />

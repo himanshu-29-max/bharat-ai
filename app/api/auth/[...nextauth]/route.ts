@@ -9,6 +9,20 @@ const handler = NextAuth({
     }),
   ],
   secret: process.env.NEXTAUTH_SECRET,
+  pages: {
+    signIn: "/login",
+  },
+  callbacks: {
+    async session({ session, token }) {
+      if (session.user && token.sub) {
+        (session.user as any).id = token.sub;
+      }
+      return session;
+    },
+    async jwt({ token }) {
+      return token;
+    },
+  },
 });
 
 export { handler as GET, handler as POST };

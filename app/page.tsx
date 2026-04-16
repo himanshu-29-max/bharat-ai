@@ -1,25 +1,48 @@
 "use client";
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, UserCircle, Menu, X } from 'lucide-react';
+import { Send, Plus, X, Sparkles, ImageIcon, FileText, Mic, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+
+type Message = {
+  role: 'user' | 'bot';
+  content: string;
+  image?: string;
+  generatedImage?: string;
+};
+
+type Mode = 'chat' | 'imagine' | 'analyze';
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState([
-    { role: 'bot', content: 'Namaste! Main **Bharat AI** hoon. Bataiye main aapki kya sewa kar sakta hoon?' }
+  const [messages, setMessages] = useState<Message[]>([
+    { role: 'bot', content: 'Namaste! Main **Bharat AI** hoon 🇮🇳\n\nMain aapki kya madad kar sakta hoon?\n\n- 💬 **Chat** — kuch bhi poochho\n- 🎨 **Image Banao** — apna idea describe karo\n- 📄 **Document Analyze** — photo ya document upload karo' }
   ]);
-  const [history, setHistory] = useState<{role: string, content: string}[]>([]);
+  const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  
+  const [mode, setMode] = useState<Mode>('chat');
+  const [showModeMenu, setShowModeMenu] = useState(false);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { 
-    scrollRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  useEffect(() => {
+    scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  const handlePlusClick = () => fileInputRef.current?.click();
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 120) + 'px';
+    }
+  }, [input]);
+
+  const handlePlusClick = () => {
+    setMode('analyze');
+    fileInputRef.current?.click();
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -30,13 +53,24 @@ export default function Home() {
     }
   };
 
+  const modeConfig = {
+    chat: { label: 'Chat', icon: <Sparkles size={14} />, color: 'from-orange-500 to-amber-500', placeholder: 'Bharat AI se kuch bhi poochho...' },
+    imagine: { label: 'Image Banao', icon: <ImageIcon size={14} />, color: 'from-violet-500 to-purple-500', placeholder: 'Image describe karo — e.g. "sunset over Taj Mahal"' },
+    analyze: { label: 'Analyze', icon: <FileText size={14} />, color: 'from-emerald-500 to-teal-500', placeholder: 'Document/image ke baare mein poochho...' },
+  };
+
   const handleSend = async () => {
     if ((!input.trim() && !selectedImage) || isLoading) return;
 
-    const userMsg = input;
+    const userMsg = input.trim();
     const userImg = selectedImage;
-    
-    setMessages(prev => [...prev, { role: "user", content: userMsg, image: userImg || undefined }]);
+    const currentMode = mode;
+
+    setMessages(prev => [...prev, {
+      role: "user",
+      content: userMsg,
+      image: userImg || undefined
+    }]);
     setInput("");
     setSelectedImage(null);
     setIsLoading(true);
@@ -45,128 +79,352 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          message: userMsg, 
+        body: JSON.stringify({
+          message: userMsg,
           imageBase64: userImg,
-          history: history
+          history,
+          mode: currentMode === 'imagine' ? 'imagine' : undefined,
         }),
       });
       const data = await res.json();
-      setMessages(prev => [...prev, { role: "bot", content: data.reply }]);
-      
-      // History update
-      setHistory(prev => [
-        ...prev,
-        { role: "user", content: userMsg },
-        { role: "assistant", content: data.reply }
-      ]);
-    } catch (err) {
-      setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai!" }]);
+
+      setMessages(prev => [...prev, {
+        role: "bot",
+        content: data.reply,
+        generatedImage: data.generatedImage,
+      }]);
+
+      if (currentMode === 'chat') {
+        setHistory(prev => [
+          ...prev,
+          { role: "user", content: userMsg },
+          { role: "assistant", content: data.reply },
+        ]);
+      }
+    } catch {
+      setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai! 🙏" }]);
     } finally {
-      setIsLoading(true);
-      setTimeout(() => setIsLoading(false), 500);
+      setTimeout(() => setIsLoading(false), 300);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
     }
   };
 
   return (
-    <div className="flex h-screen bg-[#050505] text-white font-sans selection:bg-orange-500/30 overflow-hidden">
-      <main className="flex-1 flex flex-col relative bg-[radial-gradient(circle_at_50%_0%,#151515_0%,#050505_100%)]">
-        
-        {/* HEADER */}
-        <header className="p-6 flex justify-between items-center border-b border-white/5 sticky top-0 z-50 bg-[#050505]/80 backdrop-blur-xl">
-          <div className="flex items-center gap-5">
-            <Menu size={22} className="opacity-40 hover:opacity-100 cursor-pointer transition-all" />
-            <div className="flex items-center gap-3 bg-white/5 px-5 py-2 rounded-full border border-white/10 shadow-inner">
-                <div className="flex flex-col rounded-sm overflow-hidden w-5 h-3.5">
-                   <div className="flex-1 bg-[#FF9933]"></div>
-                   <div className="flex-1 bg-white flex items-center justify-center p-[0.2px]"><div className="w-[1px] h-[1px] rounded-full border-[0.2px] border-blue-900"></div></div>
-                   <div className="flex-1 bg-[#138808]"></div>
-                </div>
-                <span className="text-[11px] font-black tracking-[0.3em] uppercase opacity-70">OMNIVERSE V28</span>
+    <div className="flex h-screen overflow-hidden" style={{
+      background: 'linear-gradient(135deg, #0a0a0f 0%, #0d0a1a 50%, #0a0f0a 100%)',
+      fontFamily: "'Segoe UI', system-ui, sans-serif"
+    }}>
+
+      {/* Ambient background orbs */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div style={{
+          position: 'absolute', top: '-20%', left: '-10%', width: '600px', height: '600px',
+          background: 'radial-gradient(circle, rgba(255,153,51,0.06) 0%, transparent 70%)',
+          borderRadius: '50%', filter: 'blur(40px)'
+        }} />
+        <div style={{
+          position: 'absolute', bottom: '-20%', right: '-10%', width: '500px', height: '500px',
+          background: 'radial-gradient(circle, rgba(19,136,8,0.06) 0%, transparent 70%)',
+          borderRadius: '50%', filter: 'blur(40px)'
+        }} />
+        <div style={{
+          position: 'absolute', top: '40%', left: '50%', width: '400px', height: '400px',
+          transform: 'translate(-50%,-50%)',
+          background: 'radial-gradient(circle, rgba(139,92,246,0.04) 0%, transparent 70%)',
+          borderRadius: '50%', filter: 'blur(60px)'
+        }} />
+      </div>
+
+      <main className="flex-1 flex flex-col relative">
+
+        {/* ── HEADER ── */}
+        <header style={{
+          padding: '14px 24px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          background: 'rgba(10,10,15,0.8)',
+          backdropFilter: 'blur(20px)',
+          position: 'sticky', top: 0, zIndex: 50
+        }}>
+          {/* Logo + Name */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* Indian flag mini */}
+            <div style={{
+              display: 'flex', flexDirection: 'column', borderRadius: '4px',
+              overflow: 'hidden', width: '28px', height: '20px',
+              boxShadow: '0 0 0 1px rgba(255,255,255,0.1)'
+            }}>
+              <div style={{ flex: 1, background: '#FF9933' }} />
+              <div style={{ flex: 1, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: '6px', height: '6px', borderRadius: '50%', border: '1px solid #000080' }} />
+              </div>
+              <div style={{ flex: 1, background: '#138808' }} />
+            </div>
+
+            <div>
+              <div style={{
+                fontSize: '18px', fontWeight: 800, letterSpacing: '-0.02em',
+                background: 'linear-gradient(90deg, #FF9933, #fff 40%, #138808)',
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent'
+              }}>
+                Bharat AI
+              </div>
+              <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.25)', letterSpacing: '0.2em', marginTop: '-2px', textTransform: 'uppercase' }}>
+                by Himanshu Ranjan
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-             <div className="hidden sm:block text-[10px] font-black text-white/20 tracking-widest uppercase">Himanshu Ranjan Edition</div>
-             <UserCircle size={32} className="opacity-20 hover:opacity-100 transition-all cursor-pointer" />
+
+          {/* Status badge */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '20px', padding: '6px 12px'
+          }}>
+            <div style={{
+              width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e',
+              boxShadow: '0 0 6px #22c55e'
+            }} />
+            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', letterSpacing: '0.1em' }}>ONLINE</span>
           </div>
         </header>
 
-        {/* CHAT AREA */}
-        <div className="flex-1 overflow-y-auto px-6 md:px-[20%] lg:px-[25%] space-y-12 py-12 scrollbar-hide pb-60">
-          {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-4 duration-500`}>
-              <div className={`max-w-[95%] p-7 rounded-[2.5rem] shadow-2xl transition-all ${
-                m.role === 'user' 
-                ? 'bg-white text-black font-extrabold shadow-[0_15px_50px_rgba(255,255,255,0.05)]' 
-                : 'bg-[#0d0d0d] border border-white/10 backdrop-blur-sm'
-              }`}>
-                {/* @ts-ignore */}
-                {m.image && <img src={m.image} className="w-64 rounded-2xl mb-4 border-2 border-black/10" alt="Upload" />}
-                <div className={`prose prose-invert max-w-none text-[17px] leading-relaxed ${m.role === 'user' ? 'text-black' : 'text-white/90'}`}>
-                  <ReactMarkdown>{m.content}</ReactMarkdown>
+        {/* ── CHAT AREA ── */}
+        <div style={{
+          flex: 1, overflowY: 'auto', padding: '32px 16px 200px',
+          scrollbarWidth: 'none'
+        }}>
+          <div style={{ maxWidth: '760px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{
+                display: 'flex',
+                justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
+                animation: 'fadeSlideIn 0.4s ease'
+              }}>
+                {/* Bot avatar */}
+                {m.role === 'bot' && (
+                  <div style={{
+                    width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
+                    background: 'linear-gradient(135deg, #FF9933, #138808)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '14px', marginRight: '10px', marginTop: '4px',
+                    boxShadow: '0 0 12px rgba(255,153,51,0.3)'
+                  }}>🇮🇳</div>
+                )}
+
+                <div style={{ maxWidth: '80%' }}>
+                  {/* User uploaded image */}
+                  {m.image && (
+                    <img src={m.image} alt="upload"
+                      style={{ width: '200px', borderRadius: '16px', marginBottom: '8px', display: 'block', marginLeft: 'auto' }} />
+                  )}
+
+                  {/* Message bubble */}
+                  <div style={{
+                    padding: '14px 18px',
+                    borderRadius: m.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
+                    background: m.role === 'user'
+                      ? 'linear-gradient(135deg, #FF9933 0%, #ff6b00 100%)'
+                      : 'rgba(255,255,255,0.04)',
+                    border: m.role === 'bot' ? '1px solid rgba(255,255,255,0.08)' : 'none',
+                    color: m.role === 'user' ? '#000' : 'rgba(255,255,255,0.9)',
+                    fontSize: '15px', lineHeight: '1.65',
+                    fontWeight: m.role === 'user' ? 600 : 400,
+                    backdropFilter: m.role === 'bot' ? 'blur(10px)' : 'none',
+                  }}>
+                    {m.role === 'bot' ? (
+                      <div className="prose prose-invert max-w-none" style={{ fontSize: '15px' }}>
+                        <ReactMarkdown>{m.content}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      <span>{m.content}</span>
+                    )}
+                  </div>
+
+                  {/* Generated image */}
+                  {m.generatedImage && (
+                    <div style={{ marginTop: '12px' }}>
+                      <img src={m.generatedImage} alt="generated"
+                        style={{
+                          width: '100%', maxWidth: '480px', borderRadius: '16px',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
+                        }} />
+                      <a href={m.generatedImage} download="bharat-ai-image.jpg" style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '6px',
+                        marginTop: '8px', padding: '6px 14px', borderRadius: '20px',
+                        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+                        color: 'rgba(255,255,255,0.5)', fontSize: '12px', textDecoration: 'none',
+                        cursor: 'pointer'
+                      }}>
+                        ⬇️ Download
+                      </a>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex items-center gap-3 ml-4 animate-pulse">
-              <div className="flex gap-1.5">
-                <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-bounce"></div>
-                <div className="w-1.5 h-1.5 bg-white rounded-full animate-bounce [animation-delay:0.2s]"></div>
-                <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+            ))}
+
+            {/* Loading dots */}
+            {isLoading && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '32px', height: '32px', borderRadius: '50%',
+                  background: 'linear-gradient(135deg, #FF9933, #138808)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px'
+                }}>🇮🇳</div>
+                <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                  {[0, 1, 2].map(i => (
+                    <div key={i} style={{
+                      width: '7px', height: '7px', borderRadius: '50%',
+                      background: i === 0 ? '#FF9933' : i === 1 ? '#fff' : '#138808',
+                      animation: `bounce 1s ease-in-out ${i * 0.15}s infinite`
+                    }} />
+                  ))}
+                </div>
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                  Soch raha hoon...
+                </span>
               </div>
-              <span className="text-[10px] font-black tracking-[0.5em] text-white/30 uppercase">BHARAT AI PROCESSING...</span>
-            </div>
-          )}
-          <div ref={scrollRef} className="h-10" />
+            )}
+            <div ref={scrollRef} />
+          </div>
         </div>
 
-        {/* FLOATING INPUT DOCK */}
-        <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-[#050505] via-[#050505]/95 to-transparent flex flex-col items-center">
-          <div className="max-w-4xl w-full relative group">
-            
+        {/* ── INPUT DOCK ── */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          padding: '16px 16px 24px',
+          background: 'linear-gradient(to top, #0a0a0f 60%, transparent)',
+        }}>
+          <div style={{ maxWidth: '760px', margin: '0 auto' }}>
+
+            {/* Mode selector */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', justifyContent: 'center' }}>
+              {(Object.keys(modeConfig) as Mode[]).map(m => (
+                <button key={m} onClick={() => setMode(m)} style={{
+                  display: 'flex', alignItems: 'center', gap: '5px',
+                  padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
+                  cursor: 'pointer', transition: 'all 0.2s',
+                  background: mode === m ? 'rgba(255,153,51,0.15)' : 'rgba(255,255,255,0.04)',
+                  border: mode === m ? '1px solid rgba(255,153,51,0.4)' : '1px solid rgba(255,255,255,0.08)',
+                  color: mode === m ? '#FF9933' : 'rgba(255,255,255,0.35)',
+                }}>
+                  {modeConfig[m].icon}
+                  {modeConfig[m].label}
+                </button>
+              ))}
+            </div>
+
+            {/* Image preview */}
             {selectedImage && (
-              <div className="absolute -top-24 left-4 p-2 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl animate-in slide-in-from-bottom-4">
-                <img src={selectedImage} className="w-16 h-16 object-cover rounded-xl" alt="Preview" />
-                <button onClick={() => setSelectedImage(null)} className="absolute -top-2 -right-2 bg-red-600 p-1 rounded-full text-white"><X size={12}/></button>
+              <div style={{
+                marginBottom: '10px', padding: '8px', background: 'rgba(255,255,255,0.04)',
+                borderRadius: '14px', border: '1px solid rgba(255,255,255,0.08)',
+                display: 'inline-flex', alignItems: 'center', gap: '10px'
+              }}>
+                <img src={selectedImage} style={{ width: '48px', height: '48px', borderRadius: '8px', objectFit: 'cover' }} alt="preview" />
+                <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>Image ready</span>
+                <button onClick={() => setSelectedImage(null)} style={{
+                  background: 'rgba(255,59,48,0.2)', border: 'none', borderRadius: '50%',
+                  width: '20px', height: '20px', cursor: 'pointer', color: '#ff3b30',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px'
+                }}>×</button>
               </div>
             )}
 
-            <div className="absolute -inset-1 bg-gradient-to-r from-orange-600 via-white to-green-600 rounded-[2.5rem] blur opacity-5 group-focus-within:opacity-15 transition duration-1000"></div>
-            
-            <div className="relative flex items-center bg-[#0d0d0d] border border-white/10 rounded-[3rem] p-3 shadow-[0_20px_50px_rgba(0,0,0,0.5)] focus-within:border-white/30 transition-all backdrop-blur-3xl">
-              <button 
-                onClick={handlePlusClick}
-                className="p-4 text-white/20 hover:text-white transition-all active:scale-90"
-              >
-                <Plus size={24} />
+            {/* Input box */}
+            <div style={{
+              display: 'flex', alignItems: 'flex-end', gap: '10px',
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '20px', padding: '10px 10px 10px 16px',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+              backdropFilter: 'blur(20px)',
+              transition: 'border-color 0.2s',
+            }}
+              onFocus={() => {}}
+            >
+              {/* Attach button */}
+              <button onClick={handlePlusClick} style={{
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '12px', padding: '8px', cursor: 'pointer', color: 'rgba(255,255,255,0.4)',
+                transition: 'all 0.2s', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center'
+              }}>
+                <Plus size={18} />
               </button>
-              
-              <input 
-                type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" 
+
+              <input type="file" ref={fileInputRef} onChange={handleFileChange}
+                className="hidden" accept="image/*,application/pdf" style={{ display: 'none' }} />
+
+              {/* Textarea */}
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={modeConfig[mode].placeholder}
+                rows={1}
+                style={{
+                  flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                  color: 'rgba(255,255,255,0.9)', fontSize: '15px', lineHeight: '1.5',
+                  resize: 'none', fontFamily: 'inherit', padding: '4px 0',
+                }}
               />
 
-              <input 
-                value={input} 
-                onChange={(e) => setInput(e.target.value)} 
-                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Ask Bharat anything..." 
-                className="flex-1 bg-transparent border-none focus:ring-0 text-lg px-4 outline-none placeholder:text-white/10 text-white"
-              />
-              
-              <button onClick={handleSend} className="bg-white text-black p-4 rounded-full shadow-2xl hover:scale-105 active:scale-95 transition-all">
-                <Send size={20} />
+              {/* Send button */}
+              <button onClick={handleSend} disabled={isLoading} style={{
+                background: input.trim() || selectedImage
+                  ? 'linear-gradient(135deg, #FF9933, #e8851a)'
+                  : 'rgba(255,255,255,0.06)',
+                border: 'none', borderRadius: '12px', padding: '10px 14px',
+                cursor: input.trim() || selectedImage ? 'pointer' : 'default',
+                color: input.trim() || selectedImage ? '#000' : 'rgba(255,255,255,0.2)',
+                transition: 'all 0.2s', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transform: isLoading ? 'scale(0.95)' : 'scale(1)'
+              }}>
+                <Send size={18} />
               </button>
             </div>
-          </div>
-          
-          <div className="mt-8 text-center">
-             <p className="text-[10px] font-black tracking-[0.8em] uppercase text-white/10 transition-all cursor-default hover:text-white/30">
+
+            {/* Footer */}
+            <div style={{ textAlign: 'center', marginTop: '10px' }}>
+              <p style={{
+                fontSize: '10px', color: 'rgba(255,255,255,0.12)',
+                letterSpacing: '0.15em', textTransform: 'uppercase'
+              }}>
                 Developed by Himanshu Ranjan
-             </p>
+              </p>
+            </div>
           </div>
         </div>
       </main>
+
+      <style>{`
+        @keyframes fadeSlideIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes bounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-6px); }
+        }
+        ::-webkit-scrollbar { display: none; }
+        .prose p { margin: 0.4em 0; }
+        .prose ul, .prose ol { margin: 0.4em 0; padding-left: 1.4em; }
+        .prose code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+        .prose pre { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 10px; overflow-x: auto; }
+        .prose strong { color: #FF9933; }
+        .prose a { color: #60a5fa; }
+        textarea::placeholder { color: rgba(255,255,255,0.2); }
+      `}</style>
     </div>
   );
 }

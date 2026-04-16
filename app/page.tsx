@@ -15,7 +15,7 @@ type Mode = 'chat' | 'imagine' | 'analyze';
 export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'bot', content: 'Namaste! Main **Bharat AI** hoon 🇮🇳\n\nMain aapki kya madad kar sakta hoon?\n\n- 💬 **Chat** — kuch bhi poochho\n- 🎨 **Image Banao** — apna idea describe karo\n- 📄 **Document Analyze** — photo ya document upload karo' }
+    { role: 'bot', content: 'Namaste! 🙏 Kya poochna hai aaj?' }
   ]);
   const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);

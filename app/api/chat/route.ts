@@ -22,7 +22,7 @@ export async function POST(req: Request) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (mode === "imagine") {
       try {
-        const segRes = await fetch("https://api.segmind.com/v1/sdxl1.0-txt2img", {
+        const segRes = await fetch("https://api.segmind.com/v1/flux-schnell", {
           method: "POST",
           headers: {
             "x-api-key": segmindKey || "",
@@ -31,16 +31,11 @@ export async function POST(req: Request) {
           body: JSON.stringify({
             prompt: cleanMsg,
             negative_prompt: "blurry, bad quality, distorted, ugly, watermark, nsfw",
-            style: "base",
             samples: 1,
-            scheduler: "UniPC",
-            num_inference_steps: 25,
-            guidance_scale: 8,
-            strength: 1,
+            num_inference_steps: 4,
+            guidance_scale: 0,
             img_width: 1024,
             img_height: 1024,
-            refine: "expert_ensemble_refiner",
-            high_noise_frac: 0.8,
             base64: true,
           }),
         });

@@ -9,7 +9,6 @@ type Mode = "chat" | "imagine" | "analyze";
 type Chat = { id: string; title: string; updatedAt: number };
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
-
 const WELCOME = "Namaste! 🙏 Kya poochna hai aaj?";
 
 export default function Home() {
@@ -24,12 +23,13 @@ export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string>(genId());
   const [isMobile, setIsMobile] = useState(false);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const chatAreaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const saveTimeout = useRef<any>(null);
+  const historyLoadedRef = useRef(false);
 
   useEffect(() => {
     const check = () => {
@@ -42,7 +42,12 @@ export default function Home() {
     return () => window.removeEventListener("resize", check);
   }, []);
 
-  useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
+  // Auto scroll to bottom
+  useEffect(() => {
+    if (chatAreaRef.current) {
+      chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
+    }
+  }, [messages, isLoading]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -51,16 +56,16 @@ export default function Home() {
     }
   }, [input]);
 
-  // Load chat list when session is ready
+  // Load history only once when authenticated
   useEffect(() => {
-    if (status === "authenticated" && !historyLoaded) {
-      setHistoryLoaded(true);
+    if (status === "authenticated" && !historyLoadedRef.current) {
+      historyLoadedRef.current = true;
       fetch("/api/history")
         .then(r => r.json())
-        .then(d => { if (d.chats) setChats(d.chats); })
+        .then(d => { if (Array.isArray(d.chats)) setChats(d.chats); })
         .catch(e => console.error("History load failed:", e));
     }
-  }, [status, historyLoaded]);
+  }, [status]);
 
   const saveChat = useCallback(async (msgs: Message[], chatId: string) => {
     if (status !== "authenticated" || msgs.length <= 1) return;
@@ -82,14 +87,14 @@ export default function Home() {
     try {
       const res = await fetch(`/api/history?chatId=${chatId}`);
       const data = await res.json();
-      if (data.messages?.length) {
+      if (Array.isArray(data.messages) && data.messages.length) {
         setMessages(data.messages);
         setHistory(data.messages.map((m: Message) => ({
           role: m.role === "bot" ? "assistant" : "user",
           content: m.content
         })));
+        setCurrentChatId(chatId);
       }
-      setCurrentChatId(chatId);
       if (isMobile) setSidebarOpen(false);
     } catch (e) { console.error("Load chat failed:", e); }
   };
@@ -130,12 +135,7 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMsg,
-          imageBase64: userImg,
-          history,
-          mode: currentMode === "imagine" ? "imagine" : undefined,
-        }),
+        body: JSON.stringify({ message: userMsg, imageBase64: userImg, history, mode: currentMode === "imagine" ? "imagine" : undefined }),
       });
       const data = await res.json();
       const botMsg: Message = { role: "bot", content: data.reply, generatedImage: data.generatedImage };
@@ -184,9 +184,7 @@ export default function Home() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <div style={{ display: "flex", flexDirection: "column", borderRadius: "3px", overflow: "hidden", width: "20px", height: "14px" }}>
-                <div style={{ flex: 1, background: "#FF9933" }} />
-                <div style={{ flex: 1, background: "#fff" }} />
-                <div style={{ flex: 1, background: "#138808" }} />
+                <div style={{ flex: 1, background: "#FF9933" }} /><div style={{ flex: 1, background: "#fff" }} /><div style={{ flex: 1, background: "#138808" }} />
               </div>
               <span style={{ fontWeight: 700, fontSize: "15px", background: "linear-gradient(90deg,#FF9933,#fff 50%,#138808)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Bharat AI</span>
             </div>
@@ -240,12 +238,13 @@ export default function Home() {
         )}
       </div>
 
-      {/* MAIN */}
-      <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative", background: "linear-gradient(135deg,#0a0a0f 0%,#0d0a1a 50%,#0a0f0a 100%)" }}>
-        <div style={{ position: "absolute", top: "-20%", left: "10%", width: "500px", height: "500px", background: "radial-gradient(circle,rgba(255,153,51,0.05) 0%,transparent 70%)", borderRadius: "50%", filter: "blur(40px)", pointerEvents: "none" }} />
-        <div style={{ position: "absolute", bottom: "-20%", right: "5%", width: "400px", height: "400px", background: "radial-gradient(circle,rgba(19,136,8,0.05) 0%,transparent 70%)", borderRadius: "50%", filter: "blur(40px)", pointerEvents: "none" }} />
+      {/* MAIN — flex column, fixed height */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden", position: "relative", background: "linear-gradient(135deg,#0a0a0f 0%,#0d0a1a 50%,#0a0f0a 100%)" }}>
+        <div style={{ position: "absolute", top: "-20%", left: "10%", width: "500px", height: "500px", background: "radial-gradient(circle,rgba(255,153,51,0.05) 0%,transparent 70%)", borderRadius: "50%", filter: "blur(40px)", pointerEvents: "none", zIndex: 0 }} />
+        <div style={{ position: "absolute", bottom: "-20%", right: "5%", width: "400px", height: "400px", background: "radial-gradient(circle,rgba(19,136,8,0.05) 0%,transparent 70%)", borderRadius: "50%", filter: "blur(40px)", pointerEvents: "none", zIndex: 0 }} />
 
-        <header style={{ padding: "11px 18px", display: "flex", alignItems: "center", gap: "10px", borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(10,10,15,0.85)", backdropFilter: "blur(20px)", position: "sticky", top: 0, zIndex: 30 }}>
+        {/* Header — fixed at top */}
+        <header style={{ flexShrink: 0, padding: "11px 18px", display: "flex", alignItems: "center", gap: "10px", borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(10,10,15,0.85)", backdropFilter: "blur(20px)", zIndex: 30 }}>
           <button onClick={() => setSidebarOpen(!sidebarOpen)}
             onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color = "#fff"}
             onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.35)"}
@@ -260,7 +259,8 @@ export default function Home() {
           </div>
         </header>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "24px 16px 190px", scrollbarWidth: "none" }}>
+        {/* Chat area — scrollable, takes remaining space */}
+        <div ref={chatAreaRef} style={{ flex: 1, overflowY: "auto", padding: "24px 16px 20px", scrollbarWidth: "none", position: "relative", zIndex: 1 }}>
           <div style={{ maxWidth: "700px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "18px" }}>
             {messages.map((m, i) => (
               <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", animation: "fadeIn 0.3s ease" }}>
@@ -287,11 +287,12 @@ export default function Home() {
                 </div>
               </div>
             )}
-            <div ref={scrollRef} />
+            <div ref={scrollRef} style={{ height: "1px" }} />
           </div>
         </div>
 
-        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "10px 16px 18px", background: "linear-gradient(to top,#0a0a0f 55%,transparent)" }}>
+        {/* Input — fixed at bottom, never overlaps chat */}
+        <div style={{ flexShrink: 0, padding: "10px 16px 16px", background: "linear-gradient(to top,#0a0a0f 80%,transparent)", zIndex: 10 }}>
           <div style={{ maxWidth: "700px", margin: "0 auto" }}>
             <div style={{ display: "flex", gap: "6px", marginBottom: "7px", justifyContent: "center" }}>
               {(Object.keys(modeConfig) as Mode[]).map(m => (
@@ -307,7 +308,7 @@ export default function Home() {
                 <button onClick={() => setSelectedImage(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#ff3b30", fontSize: "14px", lineHeight: 1 }}>×</button>
               </div>
             )}
-            <div style={{ display: "flex", alignItems: "flex-end", gap: "7px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "16px", padding: "7px 7px 7px 13px", boxShadow: "0 4px 20px rgba(0,0,0,0.2)", backdropFilter: "blur(20px)" }}>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: "7px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "7px 7px 7px 13px", boxShadow: "0 4px 20px rgba(0,0,0,0.3)", backdropFilter: "blur(20px)" }}>
               <button onClick={() => { setMode("analyze"); fileInputRef.current?.click(); }} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "9px", padding: "6px", cursor: "pointer", color: "rgba(255,255,255,0.3)", flexShrink: 0, display: "flex" }}>
                 <Plus size={15} />
               </button>
@@ -320,7 +321,7 @@ export default function Home() {
                 <Send size={15} />
               </button>
             </div>
-            <div style={{ textAlign: "center", marginTop: "7px" }}>
+            <div style={{ textAlign: "center", marginTop: "6px" }}>
               <p style={{ fontSize: "10px", color: "rgba(255,255,255,0.09)", letterSpacing: "0.12em", textTransform: "uppercase" }}>Developed by Himanshu Ranjan</p>
             </div>
           </div>

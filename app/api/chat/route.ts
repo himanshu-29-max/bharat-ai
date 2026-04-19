@@ -2,13 +2,12 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { message, imageBase64, history = [], mode } = await req.json();
+    const { message, imageBase64, fileText, fileType, history = [], mode } = await req.json();
     const groqKey = process.env.GROQ_API_KEY?.trim();
     const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim();
     const newsKey = process.env.NEWS_API_KEY?.trim();
-    const segmindKey = process.env.SEGMIND_API_KEY?.trim();
     const hfKey = process.env.HUGGINGFACE_API_KEY?.trim();
-    const groqVisionModel = process.env.GROQ_VISION_MODEL?.trim() || "llava-v1.5-7b-4096-preview";
+    const geminiKey = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_GEMINI_API_KEY?.trim();
 
     const aajKiDate = new Date().toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
@@ -16,69 +15,97 @@ export async function POST(req: Request) {
     const cleanMsg = message?.trim() || "";
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🎨 IMAGE GENERATION
+    // 🎨 IMAGE GENERATION — HuggingFace FLUX
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (mode === "imagine") {
-      // Try Segmind first
-      if (segmindKey) {
-        try {
-          const segRes = await fetch("https://api.segmind.com/v1/sdxl1.0-txt2img", {
-            method: "POST",
-            headers: { "x-api-key": segmindKey, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              prompt: cleanMsg + ", high quality, detailed, 4k",
-              negative_prompt: "blurry, bad quality, distorted, ugly, watermark, nsfw, text",
-              samples: 1,
-              scheduler: "UniPC",
-              num_inference_steps: 20,
-              guidance_scale: 7.5,
-              img_width: 1024,
-              img_height: 1024,
-              base64: true,
-            }),
-          });
-          if (segRes.ok) {
-            const segData = await segRes.json();
-            if (segData.image) {
-              return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: `data:image/jpeg;base64,${segData.image}` });
-            }
-          }
-          const errText = await segRes.text().catch(() => "");
-          console.error("Segmind error:", errText);
-        } catch (e) { console.error("Segmind failed:", e); }
-      }
-      // Fallback: HuggingFace
       return await generateWithHuggingFace(cleanMsg, hfKey || "");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 👁️ VISION / DOCUMENT ANALYSIS
+    // 📄 DOCUMENT / TEXT FILE ANALYSIS
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if (fileText) {
+      const docPrompt = `Tu Bharat AI hai. Aaj: ${aajKiDate}.
+User ne ek document share kiya hai. Use detail mein analyze kar.
+Hinglish mein jawab de. Namaste! se shuru karo.
+
+Document type: ${fileType || "unknown"}
+Document content:
+---
+${fileText.slice(0, 8000)}
+---
+
+User ka sawaal: ${cleanMsg || "Is document ko analyze karo aur key points batao."}`;
+
+      const chatRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${groqKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [{ role: "user", content: docPrompt }],
+          max_tokens: 2000, temperature: 0.3,
+        }),
+      });
+      const chatData = await chatRes.json();
+      const reply = chatData.choices?.[0]?.message?.content;
+      if (!reply) throw new Error("No reply from Groq");
+      return NextResponse.json({ reply });
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 👁️ IMAGE ANALYSIS — Gemini Vision (best for images)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (imageBase64) {
+      // Extract base64 data
+      const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+      const mimeType = imageBase64.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+
+      // Try Gemini first (best vision model)
+      if (geminiKey) {
+        try {
+          const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { inline_data: { mime_type: mimeType, data: base64Data } },
+                  { text: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}. Is image ko detail mein analyze kar. Hinglish mein jawab de. Namaste! se shuru karo.\n\nUser ka sawaal: ${cleanMsg || "Is image ko analyze karo aur detail mein batao."}` }
+                ]
+              }],
+              generationConfig: { maxOutputTokens: 2000, temperature: 0.3 }
+            }),
+          });
+          const geminiData = await geminiRes.json();
+          const reply = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (reply) return NextResponse.json({ reply });
+          console.error("Gemini vision error:", JSON.stringify(geminiData));
+        } catch (e) { console.error("Gemini vision failed:", e); }
+      }
+
+      // Fallback: Groq Vision
       try {
         const visionRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: { "Authorization": `Bearer ${groqKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: groqVisionModel,
-            messages: [
-              { role: "system", content: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}. Images aur documents ko detail mein analyze kar. Hinglish mein jawab de. Namaste! se shuru karo.` },
-              { role: "user", content: [
+            model: "meta-llama/llama-4-scout-17b-16e-instruct",
+            messages: [{
+              role: "user", content: [
                 { type: "image_url", image_url: { url: imageBase64 } },
-                { type: "text", text: cleanMsg || "Is image/document ko detail mein analyze karo aur summary batao." }
-              ]}
-            ],
+                { type: "text", text: `Tu Bharat AI hai. Aaj: ${aajKiDate}. Is image ko analyze kar. Hinglish mein jawab de. Namaste! se shuru karo.\n${cleanMsg || "Detail mein batao."}` }
+              ]
+            }],
             max_tokens: 1500, temperature: 0.3,
           }),
         });
         const visionData = await visionRes.json();
         const reply = visionData.choices?.[0]?.message?.content;
-        if (!reply) throw new Error(JSON.stringify(visionData));
-        return NextResponse.json({ reply });
-      } catch (e) {
-        console.error("Vision failed:", e);
-        return NextResponse.json({ reply: "Namaste! Image analyze nahi ho paya. Koi aur image try karo ya model change karo!" });
-      }
+        if (reply) return NextResponse.json({ reply });
+        console.error("Groq vision error:", JSON.stringify(visionData));
+      } catch (e) { console.error("Groq vision failed:", e); }
+
+      return NextResponse.json({ reply: "Namaste! Image analyze nahi ho paya. Koi aur image try karo!" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -100,7 +127,7 @@ export async function POST(req: Request) {
 
     if (!searchContext && cleanMsg.length > 2 && serperKey) {
       try {
-        const isCurrent = /(today|aaj|abhi|latest|current|price|rate|score|match|result|election|weather|kaun|kab|kahan|kya h|kya hai|2024|2025|2026)/i.test(cleanMsg);
+        const isCurrent = /(today|aaj|abhi|latest|current|price|rate|score|match|result|election|weather|kaun|kab|kahan|kya h|kya hai|2025|2026)/i.test(cleanMsg);
         const q = isCurrent ? `${cleanMsg} ${new Date().getFullYear()}` : cleanMsg;
         const sRes = await fetch("https://google.serper.dev/search", {
           method: "POST",
@@ -109,28 +136,26 @@ export async function POST(req: Request) {
         });
         const sData = await sRes.json();
         const results = sData.organic?.slice(0, 5) || [];
-        if (results.length > 0) {
-          searchContext = results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
-        }
-        // Also use answer box if present
-        if (sData.answerBox?.answer) {
-          searchContext = `Direct Answer: ${sData.answerBox.answer}\n\n` + searchContext;
-        }
+        if (sData.answerBox?.answer) searchContext = `Direct Answer: ${sData.answerBox.answer}\n\n`;
+        if (sData.answerBox?.snippet) searchContext += `${sData.answerBox.snippet}\n\n`;
+        if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
       } catch (e) { console.error("Serper failed:", e); }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🤖 MAIN CHAT — Groq Llama
+    // 🤖 MAIN CHAT — Groq Llama 3.3 70B
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Tu India ka sabse helpful AI assistant hai — smart, fast aur honest.
-Hinglish mein jawab de — simple, clear aur factual.
+Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa lekin Hinglish mein.
+Smart, fast, accurate aur honest.
 
 RULES:
-- Agar Search data diya gaya hai toh USI se jawab de, apni taraf se fabricate mat kar.
-- Search data nahi mila ya irrelevant hai toh apni knowledge se jawab de, clearly bol "Meri knowledge ke basis pe:".
-- Kabhi bhi galat ya made-up info mat dena.
-- Context yaad rakho — "ye/woh/iska/uska" ka matlab pichli baaton se samjho.
+- Search data mila hai toh USI se jawab de, fabricate mat kar.
+- Search data nahi mila toh apni knowledge se jawab de, clearly bol "Meri knowledge ke basis pe:".
+- Kabhi galat info mat dena. Pata nahi toh bol do.
+- Context yaad rakho — "ye/woh/iska" ka matlab pichli baaton se samjho.
+- Code likhna ho toh proper code blocks use karo.
+- Math problems solve karo step by step.
 - Har jawab Namaste! se shuru karo.`;
 
     const userText = searchContext
@@ -142,8 +167,8 @@ RULES:
       headers: { "Authorization": `Bearer ${groqKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        messages: [{ role: "system", content: systemPrompt }, ...history.slice(-8), { role: "user", content: userText }],
-        max_tokens: 1500, temperature: 0.3,
+        messages: [{ role: "system", content: systemPrompt }, ...history.slice(-10), { role: "user", content: userText }],
+        max_tokens: 2000, temperature: 0.3,
       }),
     });
 
@@ -170,14 +195,15 @@ async function generateWithHuggingFace(prompt: string, hfKey: string) {
     });
     if (!hfRes.ok) {
       const err = await hfRes.text();
-      if (err.includes("loading")) return NextResponse.json({ reply: "⏳ Image model warm up ho raha hai (~30 sec). Thoda wait karke dobara try karo!" });
       console.error("HF error:", err);
+      if (err.includes("loading")) return NextResponse.json({ reply: "⏳ Image model warm up ho raha hai (~30 sec). Thoda wait karke dobara try karo!" });
       return NextResponse.json({ reply: "Image generation fail ho gayi. Thodi der baad try karo! 🙏" });
     }
     const buffer = await hfRes.arrayBuffer();
     const base64 = Buffer.from(buffer).toString("base64");
     return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: `data:image/jpeg;base64,${base64}` });
   } catch (e) {
+    console.error("HF exception:", e);
     return NextResponse.json({ reply: "Image generation fail ho gayi! 🙏" });
   }
 }

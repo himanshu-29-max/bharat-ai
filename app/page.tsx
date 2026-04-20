@@ -1,24 +1,34 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { Send, Plus, X, Sparkles, ImageIcon, FileText, Trash2, MessageSquare, LogOut, Menu, PenSquare } from "lucide-react";
+import { Send, Plus, Sparkles, ImageIcon, FileText, Trash2, MessageSquare, LogOut, Menu, PenSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
 type Message = { role: "user" | "bot"; content: string; image?: string; fileName?: string; generatedImage?: string };
 type Mode = "chat" | "imagine" | "analyze";
 type Chat = { id: string; title: string; updatedAt: number };
+type AttachedFile = { type: "image" | "pdf" | "text"; data: string; name: string; mime: string };
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
 const WELCOME = "Namaste! 🙏 Kya poochna hai aaj?";
 
-async function readFile(file: File): Promise<{ type: "image" | "text"; data: string; name: string }> {
+async function readFile(file: File): Promise<AttachedFile> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     const isImage = file.type.startsWith("image/");
-    reader.onloadend = () => resolve({ type: isImage ? "image" : "text", data: reader.result as string, name: file.name });
+    const isPDF = file.type === "application/pdf";
     reader.onerror = reject;
-    if (isImage) reader.readAsDataURL(file);
-    else reader.readAsText(file);
+    if (isImage || isPDF) {
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1];
+        resolve({ type: isImage ? "image" : "pdf", data: base64, name: file.name, mime: file.type });
+      };
+      reader.readAsDataURL(file);
+    } else {
+      reader.onloadend = () => resolve({ type: "text", data: reader.result as string, name: file.name, mime: file.type });
+      reader.readAsText(file);
+    }
   });
 }
 
@@ -27,7 +37,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([{ role: "bot", content: WELCOME }]);
   const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
-  const [attachedFile, setAttachedFile] = useState<{ type: "image" | "text"; data: string; name: string } | null>(null);
+  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<Mode>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -39,7 +49,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const saveTimeout = useRef<any>(null);
-  const historyLoadedRef = useRef(false);
+  const prevStatusRef = useRef<string>("");
 
   useEffect(() => {
     const check = () => { const m = window.innerWidth < 768; setIsMobile(m); if (m) setSidebarOpen(false); };
@@ -58,18 +68,25 @@ export default function Home() {
     }
   }, [input]);
 
+  // Load history when status changes to authenticated
   useEffect(() => {
-    if (status === "authenticated" && !historyLoadedRef.current) {
-      historyLoadedRef.current = true;
-      fetch("/api/history").then(r => r.json()).then(d => { if (Array.isArray(d.chats)) setChats(d.chats); }).catch(console.error);
+    if (status === "authenticated" && prevStatusRef.current !== "authenticated") {
+      prevStatusRef.current = "authenticated";
+      fetch("/api/history")
+        .then(r => r.json())
+        .then(d => { if (Array.isArray(d.chats)) setChats(d.chats); })
+        .catch(console.error);
     }
+    if (status !== "authenticated") prevStatusRef.current = status;
   }, [status]);
 
   const saveChat = useCallback(async (msgs: Message[], chatId: string) => {
     if (status !== "authenticated" || msgs.length <= 1) return;
     const title = msgs.find(m => m.role === "user")?.content?.slice(0, 40) || "Naya Chat";
     try {
-      await fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, title, messages: msgs }) });
+      // Save without image data to keep Redis small
+      const saveMsgs = msgs.map(m => ({ ...m, image: undefined, generatedImage: m.generatedImage ? "[image]" : undefined }));
+      await fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, title, messages: saveMsgs }) });
       setChats(prev => [{ id: chatId, title, updatedAt: Date.now() }, ...prev.filter(c => c.id !== chatId)].slice(0, 50));
     } catch (e) { console.error("Save failed:", e); }
   }, [status]);
@@ -103,7 +120,7 @@ export default function Home() {
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { alert("Max 10MB allowed!"); return; }
+    if (file.size > 15 * 1024 * 1024) { alert("Max 15MB allowed!"); return; }
     try {
       const result = await readFile(file);
       setAttachedFile(result);
@@ -117,14 +134,22 @@ export default function Home() {
     const userMsg = input.trim();
     const file = attachedFile;
     const currentMode = mode;
-    const displayContent = userMsg || (file ? `📎 ${file.name}` : "");
-    const newMsg: Message = { role: "user", content: displayContent, image: file?.type === "image" ? file.data : undefined, fileName: file?.type === "text" ? file.name : undefined };
+
+    const newMsg: Message = {
+      role: "user",
+      content: userMsg || `📎 ${file?.name}`,
+      image: file?.type === "image" ? `data:${file.mime};base64,${file.data}` : undefined,
+      fileName: (file?.type === "pdf" || file?.type === "text") ? file.name : undefined,
+    };
     const newMessages = [...messages, newMsg];
     setMessages(newMessages); setInput(""); setAttachedFile(null); setIsLoading(true);
+
     try {
       const body: any = { message: userMsg, history, mode: currentMode === "imagine" ? "imagine" : undefined };
-      if (file?.type === "image") body.imageBase64 = file.data;
-      if (file?.type === "text") { body.fileText = file.data; body.fileType = file.name.split(".").pop(); }
+      if (file?.type === "image") body.imageBase64 = `data:${file.mime};base64,${file.data}`;
+      if (file?.type === "pdf") { body.fileBase64 = file.data; body.fileMime = "application/pdf"; body.fileType = "pdf"; }
+      if (file?.type === "text") { body.fileBase64 = btoa(unescape(encodeURIComponent(file.data))); body.fileMime = "text/plain"; body.fileType = file.name.split(".").pop(); }
+
       const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json();
       const botMsg: Message = { role: "bot", content: data.reply, generatedImage: data.generatedImage };
@@ -132,7 +157,7 @@ export default function Home() {
       setMessages(finalMessages);
       if (currentMode === "chat") setHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "assistant", content: data.reply }]);
       clearTimeout(saveTimeout.current);
-      saveTimeout.current = setTimeout(() => saveChat(finalMessages, currentChatId), 1200);
+      saveTimeout.current = setTimeout(() => saveChat(finalMessages, currentChatId), 1500);
     } catch { setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai! 🙏" }]); }
     finally { setTimeout(() => setIsLoading(false), 300); }
   };
@@ -140,7 +165,7 @@ export default function Home() {
   const modeConfig = {
     chat: { label: "Chat", icon: <Sparkles size={13} />, placeholder: "Bharat AI se kuch bhi poochho..." },
     imagine: { label: "Image Banao", icon: <ImageIcon size={13} />, placeholder: "Image describe karo — e.g. sunset over Taj Mahal" },
-    analyze: { label: "Analyze", icon: <FileText size={13} />, placeholder: "File upload karke poochho ya seedha type karo..." },
+    analyze: { label: "Analyze", icon: <FileText size={13} />, placeholder: "File upload karo ya seedha type karo..." },
   };
 
   const groupChats = (list: Chat[]) => {
@@ -154,11 +179,9 @@ export default function Home() {
   };
   const grouped = groupChats(chats);
 
-  const fileTypes = "image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.ppt,.pptx,.json,.md";
-
   return (
     <div style={{ display:"flex", height:"100vh", overflow:"hidden", background:"#0a0a0f", fontFamily:"'Segoe UI',system-ui,sans-serif", color:"#fff" }}>
-      {sidebarOpen && isMobile && <div onClick={() => setSidebarOpen(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:40 }} />}
+      {sidebarOpen && isMobile && <div onClick={() => setSidebarOpen(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:40 }}/>}
 
       {/* SIDEBAR */}
       <div style={{ width:"255px", flexShrink:0, display:"flex", flexDirection:"column", background:"rgba(255,255,255,0.015)", borderRight:"1px solid rgba(255,255,255,0.06)", transform:sidebarOpen?"translateX(0)":"translateX(-100%)", transition:"transform 0.25s ease", position:isMobile?"fixed":"relative", height:"100vh", zIndex:45 }}>
@@ -219,7 +242,6 @@ export default function Home() {
         <div style={{ position:"absolute", top:"-20%", left:"10%", width:"500px", height:"500px", background:"radial-gradient(circle,rgba(255,153,51,0.05) 0%,transparent 70%)", borderRadius:"50%", filter:"blur(40px)", pointerEvents:"none", zIndex:0 }}/>
         <div style={{ position:"absolute", bottom:"-20%", right:"5%", width:"400px", height:"400px", background:"radial-gradient(circle,rgba(19,136,8,0.05) 0%,transparent 70%)", borderRadius:"50%", filter:"blur(40px)", pointerEvents:"none", zIndex:0 }}/>
 
-        {/* Header */}
         <header style={{ flexShrink:0, padding:"11px 18px", display:"flex", alignItems:"center", gap:"10px", borderBottom:"1px solid rgba(255,255,255,0.05)", background:"rgba(10,10,15,0.85)", backdropFilter:"blur(20px)", zIndex:30 }}>
           <button onClick={() => setSidebarOpen(!sidebarOpen)}
             onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color="#fff"}
@@ -235,24 +257,23 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Chat Area */}
         <div ref={chatAreaRef} style={{ flex:1, overflowY:"auto", padding:"24px 16px 20px", scrollbarWidth:"none", position:"relative", zIndex:1 }}>
           <div style={{ maxWidth:"700px", margin:"0 auto", display:"flex", flexDirection:"column", gap:"18px" }}>
             {messages.map((m, i) => (
               <div key={i} style={{ display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start", animation:"fadeIn 0.3s ease" }}>
                 {m.role==="bot" && <div style={{ width:"28px", height:"28px", borderRadius:"50%", flexShrink:0, background:"linear-gradient(135deg,#FF9933,#138808)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"12px", marginRight:"8px", marginTop:"3px", boxShadow:"0 0 8px rgba(255,153,51,0.2)" }}>🇮🇳</div>}
                 <div style={{ maxWidth:"78%" }}>
-                  {m.image && <img src={m.image} alt="upload" style={{ maxWidth:"250px", borderRadius:"12px", marginBottom:"6px", display:"block", marginLeft:"auto" }}/>}
+                  {m.image && <img src={m.image} alt="upload" style={{ maxWidth:"220px", borderRadius:"12px", marginBottom:"6px", display:"block", marginLeft:"auto" }}/>}
                   {m.fileName && (
-                    <div style={{ display:"flex", alignItems:"center", gap:"6px", background:"rgba(255,153,51,0.1)", border:"1px solid rgba(255,153,51,0.2)", borderRadius:"8px", padding:"6px 10px", marginBottom:"6px", marginLeft:"auto", width:"fit-content" }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:"6px", background:"rgba(255,153,51,0.1)", border:"1px solid rgba(255,153,51,0.25)", borderRadius:"8px", padding:"6px 12px", marginBottom:"6px", marginLeft:"auto", width:"fit-content" }}>
                       <FileText size={14} color="#FF9933"/>
-                      <span style={{ fontSize:"12px", color:"#FF9933" }}>{m.fileName}</span>
+                      <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"180px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.fileName}</span>
                     </div>
                   )}
                   <div style={{ padding:"11px 15px", borderRadius:m.role==="user"?"16px 16px 3px 16px":"16px 16px 16px 3px", background:m.role==="user"?"linear-gradient(135deg,#FF9933,#e8851a)":"rgba(255,255,255,0.04)", border:m.role==="bot"?"1px solid rgba(255,255,255,0.06)":"none", color:m.role==="user"?"#000":"rgba(255,255,255,0.87)", fontSize:"14px", lineHeight:"1.65", fontWeight:m.role==="user"?600:400, backdropFilter:m.role==="bot"?"blur(10px)":"none" }}>
                     {m.role==="bot" ? <div className="prose prose-invert max-w-none" style={{ fontSize:"14px" }}><ReactMarkdown>{m.content}</ReactMarkdown></div> : <span>{m.content}</span>}
                   </div>
-                  {m.generatedImage && (
+                  {m.generatedImage && m.generatedImage !== "[image]" && (
                     <div style={{ marginTop:"8px" }}>
                       <img src={m.generatedImage} alt="generated" style={{ width:"100%", maxWidth:"400px", borderRadius:"12px", border:"1px solid rgba(255,255,255,0.07)", boxShadow:"0 6px 24px rgba(0,0,0,0.35)" }}/>
                       <a href={m.generatedImage} download="bharat-ai.jpg" style={{ display:"inline-flex", alignItems:"center", gap:"4px", marginTop:"5px", padding:"4px 10px", borderRadius:"12px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", color:"rgba(255,255,255,0.35)", fontSize:"11px", textDecoration:"none" }}>⬇️ Download</a>
@@ -272,10 +293,9 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Input Area */}
+        {/* Input */}
         <div style={{ flexShrink:0, padding:"10px 16px 16px", background:"linear-gradient(to top,#0a0a0f 80%,transparent)", zIndex:10 }}>
           <div style={{ maxWidth:"700px", margin:"0 auto" }}>
-            {/* Mode tabs */}
             <div style={{ display:"flex", gap:"6px", marginBottom:"7px", justifyContent:"center" }}>
               {(Object.keys(modeConfig) as Mode[]).map(m => (
                 <button key={m} onClick={() => setMode(m)} style={{ display:"flex", alignItems:"center", gap:"4px", padding:"4px 11px", borderRadius:"16px", fontSize:"11.5px", fontWeight:600, cursor:"pointer", transition:"all 0.15s", background:mode===m?"rgba(255,153,51,0.1)":"rgba(255,255,255,0.03)", border:mode===m?"1px solid rgba(255,153,51,0.3)":"1px solid rgba(255,255,255,0.06)", color:mode===m?"#FF9933":"rgba(255,255,255,0.28)" }}>
@@ -283,26 +303,22 @@ export default function Home() {
                 </button>
               ))}
             </div>
-
-            {/* File preview */}
             {attachedFile && (
               <div style={{ marginBottom:"7px", display:"inline-flex", alignItems:"center", gap:"7px", padding:"5px 10px", background:"rgba(255,153,51,0.08)", border:"1px solid rgba(255,153,51,0.2)", borderRadius:"10px" }}>
                 {attachedFile.type === "image"
-                  ? <img src={attachedFile.data} style={{ width:"32px", height:"32px", borderRadius:"5px", objectFit:"cover" }} alt="preview"/>
-                  : <FileText size={16} color="#FF9933"/>}
+                  ? <img src={`data:${attachedFile.mime};base64,${attachedFile.data}`} style={{ width:"32px", height:"32px", borderRadius:"5px", objectFit:"cover" }} alt="preview"/>
+                  : <FileText size={15} color="#FF9933"/>}
                 <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{attachedFile.name}</span>
-                <button onClick={() => setAttachedFile(null)} style={{ background:"none", border:"none", cursor:"pointer", color:"#ff3b30", fontSize:"16px", lineHeight:1, padding:"0 2px" }}>×</button>
+                <button onClick={() => setAttachedFile(null)} style={{ background:"none", border:"none", cursor:"pointer", color:"#ff3b30", fontSize:"16px", lineHeight:1 }}>×</button>
               </div>
             )}
-
-            {/* Input box */}
             <div style={{ display:"flex", alignItems:"flex-end", gap:"7px", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"16px", padding:"7px 7px 7px 13px", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", backdropFilter:"blur(20px)" }}>
-              <button onClick={() => fileInputRef.current?.click()}
-                title="Attach file (image, PDF, Word, Excel, TXT...)"
-                style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"9px", padding:"6px", cursor:"pointer", color:"rgba(255,255,255,0.4)", flexShrink:0, display:"flex", transition:"all 0.15s" }}>
+              <button onClick={() => fileInputRef.current?.click()} title="Image, PDF, Word, Excel, TXT..."
+                style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"9px", padding:"6px", cursor:"pointer", color:"rgba(255,255,255,0.4)", flexShrink:0, display:"flex" }}>
                 <Plus size={15}/>
               </button>
-              <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display:"none" }} accept={fileTypes}/>
+              <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display:"none" }}
+                accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.ppt,.pptx,.json,.md"/>
               <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();handleSend();}}}
                 placeholder={modeConfig[mode].placeholder} rows={1}
@@ -312,11 +328,9 @@ export default function Home() {
                 <Send size={15}/>
               </button>
             </div>
-
-            {/* Supported formats hint */}
             <div style={{ textAlign:"center", marginTop:"5px" }}>
-              <p style={{ fontSize:"9px", color:"rgba(255,255,255,0.15)", letterSpacing:"0.08em" }}>
-                📎 Image • PDF • Word • Excel • TXT • CSV • JSON supported &nbsp;|&nbsp; Developed by Himanshu Ranjan
+              <p style={{ fontSize:"9px", color:"rgba(255,255,255,0.12)", letterSpacing:"0.06em" }}>
+                📎 Image • PDF • Word • Excel • TXT • CSV &nbsp;|&nbsp; Developed by Himanshu Ranjan
               </p>
             </div>
           </div>

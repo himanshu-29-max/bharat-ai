@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { Send, Plus, Sparkles, ImageIcon, FileText, Trash2, MessageSquare, LogOut, Menu, PenSquare, X } from "lucide-react";
+import { Send, Plus, X, Sparkles, ImageIcon, FileText, Trash2, MessageSquare, LogOut, Menu, PenSquare } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
 type Message = { role: "user" | "bot"; content: string; image?: string; fileName?: string; generatedImage?: string };
@@ -18,6 +18,7 @@ async function readFile(file: File): Promise<AttachedFile> {
     const isImage = file.type.startsWith("image/");
     const isPDF = file.type === "application/pdf";
     reader.onerror = reject;
+    // Images and PDFs → base64 via readAsDataURL
     if (isImage || isPDF) {
       reader.onloadend = () => {
         const result = reader.result as string;
@@ -26,6 +27,7 @@ async function readFile(file: File): Promise<AttachedFile> {
       };
       reader.readAsDataURL(file);
     } else {
+      // Text files → plain text
       reader.onloadend = () => resolve({ type: "text", data: reader.result as string, name: file.name, mime: file.type });
       reader.readAsText(file);
     }
@@ -68,14 +70,10 @@ export default function Home() {
     }
   }, [input]);
 
-  // Load history when status changes to authenticated
   useEffect(() => {
     if (status === "authenticated" && prevStatusRef.current !== "authenticated") {
       prevStatusRef.current = "authenticated";
-      fetch("/api/history")
-        .then(r => r.json())
-        .then(d => { if (Array.isArray(d.chats)) setChats(d.chats); })
-        .catch(console.error);
+      fetch("/api/history").then(r => r.json()).then(d => { if (Array.isArray(d.chats)) setChats(d.chats); }).catch(console.error);
     }
     if (status !== "authenticated") prevStatusRef.current = status;
   }, [status]);
@@ -84,8 +82,7 @@ export default function Home() {
     if (status !== "authenticated" || msgs.length <= 1) return;
     const title = msgs.find(m => m.role === "user")?.content?.slice(0, 40) || "Naya Chat";
     try {
-      // Save without image data to keep Redis small
-      const saveMsgs = msgs.map(m => ({ ...m, image: undefined, generatedImage: m.generatedImage ? "[image]" : undefined }));
+      const saveMsgs = msgs.map(m => ({ role: m.role, content: m.content, fileName: m.fileName, generatedImage: m.generatedImage?.startsWith("http") ? m.generatedImage : undefined }));
       await fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, title, messages: saveMsgs }) });
       setChats(prev => [{ id: chatId, title, updatedAt: Date.now() }, ...prev.filter(c => c.id !== chatId)].slice(0, 50));
     } catch (e) { console.error("Save failed:", e); }
@@ -147,8 +144,12 @@ export default function Home() {
     try {
       const body: any = { message: userMsg, history, mode: currentMode === "imagine" ? "imagine" : undefined };
       if (file?.type === "image") body.imageBase64 = `data:${file.mime};base64,${file.data}`;
-      if (file?.type === "pdf") { body.fileBase64 = file.data; body.fileMime = "application/pdf"; body.fileType = "pdf"; }
-      if (file?.type === "text") { body.fileBase64 = btoa(unescape(encodeURIComponent(file.data))); body.fileMime = "text/plain"; body.fileType = file.name.split(".").pop(); }
+      if (file?.type === "pdf") { body.fileBase64 = file.data; body.fileMime = "application/pdf"; }
+      if (file?.type === "text") {
+        // Encode text safely for JSON transport
+        try { body.fileBase64 = btoa(unescape(encodeURIComponent(file.data))); } catch { body.fileBase64 = btoa(file.data); }
+        body.fileMime = "text/plain";
+      }
 
       const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json();
@@ -171,10 +172,7 @@ export default function Home() {
   const groupChats = (list: Chat[]) => {
     const now = Date.now();
     const g: Record<string, Chat[]> = { "Aaj": [], "Is Hafte": [], "Is Mahine": [], "Purane": [] };
-    list.forEach(c => {
-      const d = (now - c.updatedAt) / 86400000;
-      if (d < 1) g["Aaj"].push(c); else if (d < 7) g["Is Hafte"].push(c); else if (d < 30) g["Is Mahine"].push(c); else g["Purane"].push(c);
-    });
+    list.forEach(c => { const d = (now - c.updatedAt) / 86400000; if (d < 1) g["Aaj"].push(c); else if (d < 7) g["Is Hafte"].push(c); else if (d < 30) g["Is Mahine"].push(c); else g["Purane"].push(c); });
     return g;
   };
   const grouped = groupChats(chats);
@@ -202,8 +200,7 @@ export default function Home() {
         <div style={{ flex:1, overflowY:"auto", padding:"6px 8px", scrollbarWidth:"none" }}>
           {chats.length === 0 ? (
             <div style={{ textAlign:"center", color:"rgba(255,255,255,0.18)", fontSize:"12px", padding:"32px 12px" }}>
-              <MessageSquare size={22} style={{ margin:"0 auto 8px", display:"block", opacity:0.3 }}/>
-              Abhi koi chat nahi
+              <MessageSquare size={22} style={{ margin:"0 auto 8px", display:"block", opacity:0.3 }}/>Abhi koi chat nahi
             </div>
           ) : Object.entries(grouped).map(([group, list]) => list.length === 0 ? null : (
             <div key={group}>
@@ -212,9 +209,7 @@ export default function Home() {
                 <div key={chat.id} onClick={() => loadChat(chat.id)} className="chat-item"
                   style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"7px 8px", borderRadius:"8px", cursor:"pointer", marginBottom:"1px", background:currentChatId===chat.id?"rgba(255,153,51,0.08)":"transparent", border:currentChatId===chat.id?"1px solid rgba(255,153,51,0.18)":"1px solid transparent", transition:"all 0.15s" }}>
                   <span style={{ fontSize:"12.5px", color:currentChatId===chat.id?"#FF9933":"rgba(255,255,255,0.55)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{chat.title}</span>
-                  <button onClick={e => deleteChat(e, chat.id)} className="delete-btn" style={{ background:"none", border:"none", cursor:"pointer", color:"rgba(255,255,255,0.2)", padding:"2px", flexShrink:0, opacity:0, transition:"opacity 0.15s" }}>
-                    <Trash2 size={12}/>
-                  </button>
+                  <button onClick={e => deleteChat(e, chat.id)} className="delete-btn" style={{ background:"none", border:"none", cursor:"pointer", color:"rgba(255,255,255,0.2)", padding:"2px", flexShrink:0, opacity:0, transition:"opacity 0.15s" }}><Trash2 size={12}/></button>
                 </div>
               ))}
             </div>
@@ -267,16 +262,20 @@ export default function Home() {
                   {m.fileName && (
                     <div style={{ display:"flex", alignItems:"center", gap:"6px", background:"rgba(255,153,51,0.1)", border:"1px solid rgba(255,153,51,0.25)", borderRadius:"8px", padding:"6px 12px", marginBottom:"6px", marginLeft:"auto", width:"fit-content" }}>
                       <FileText size={14} color="#FF9933"/>
-                      <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"180px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.fileName}</span>
+                      <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.fileName}</span>
                     </div>
                   )}
                   <div style={{ padding:"11px 15px", borderRadius:m.role==="user"?"16px 16px 3px 16px":"16px 16px 16px 3px", background:m.role==="user"?"linear-gradient(135deg,#FF9933,#e8851a)":"rgba(255,255,255,0.04)", border:m.role==="bot"?"1px solid rgba(255,255,255,0.06)":"none", color:m.role==="user"?"#000":"rgba(255,255,255,0.87)", fontSize:"14px", lineHeight:"1.65", fontWeight:m.role==="user"?600:400, backdropFilter:m.role==="bot"?"blur(10px)":"none" }}>
                     {m.role==="bot" ? <div className="prose prose-invert max-w-none" style={{ fontSize:"14px" }}><ReactMarkdown>{m.content}</ReactMarkdown></div> : <span>{m.content}</span>}
                   </div>
-                  {m.generatedImage && m.generatedImage !== "[image]" && (
+                  {m.generatedImage && (
                     <div style={{ marginTop:"8px" }}>
-                      <img src={m.generatedImage} alt="generated" style={{ width:"100%", maxWidth:"400px", borderRadius:"12px", border:"1px solid rgba(255,255,255,0.07)", boxShadow:"0 6px 24px rgba(0,0,0,0.35)" }}/>
-                      <a href={m.generatedImage} download="bharat-ai.jpg" style={{ display:"inline-flex", alignItems:"center", gap:"4px", marginTop:"5px", padding:"4px 10px", borderRadius:"12px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", color:"rgba(255,255,255,0.35)", fontSize:"11px", textDecoration:"none" }}>⬇️ Download</a>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={m.generatedImage} alt="generated"
+                        style={{ width:"100%", maxWidth:"420px", borderRadius:"12px", border:"1px solid rgba(255,255,255,0.07)", boxShadow:"0 6px 24px rgba(0,0,0,0.35)", display:"block" }}
+                        onError={e => { (e.target as HTMLImageElement).style.display="none"; }}
+                      />
+                      <a href={m.generatedImage} target="_blank" rel="noreferrer" download style={{ display:"inline-flex", alignItems:"center", gap:"4px", marginTop:"5px", padding:"4px 10px", borderRadius:"12px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", color:"rgba(255,255,255,0.35)", fontSize:"11px", textDecoration:"none" }}>⬇️ Download</a>
                     </div>
                   )}
                 </div>
@@ -293,7 +292,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Input */}
         <div style={{ flexShrink:0, padding:"10px 16px 16px", background:"linear-gradient(to top,#0a0a0f 80%,transparent)", zIndex:10 }}>
           <div style={{ maxWidth:"700px", margin:"0 auto" }}>
             <div style={{ display:"flex", gap:"6px", marginBottom:"7px", justifyContent:"center" }}>
@@ -318,7 +316,7 @@ export default function Home() {
                 <Plus size={15}/>
               </button>
               <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display:"none" }}
-                accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.ppt,.pptx,.json,.md"/>
+                accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.json,.md"/>
               <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();handleSend();}}}
                 placeholder={modeConfig[mode].placeholder} rows={1}

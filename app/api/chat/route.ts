@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     const cleanMsg = message?.trim() || "";
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🎨 IMAGE GENERATION — Pollinations direct URL
+    // 🎨 IMAGE GENERATION
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (mode === "imagine") {
       const seed = Math.floor(Math.random() * 999999);
@@ -33,10 +33,15 @@ export async function POST(req: Request) {
       const mime = fileMime || (imageBase64?.startsWith("data:image/png") ? "image/png" : "image/jpeg");
       const userQ = cleanMsg || "Is file ko detail mein analyze karo aur poori summary do.";
 
-      if (geminiKey) {
+      if (!geminiKey) {
+        return NextResponse.json({ reply: "Namaste! GEMINI_API_KEY Vercel mein set nahi hai. Please check karo!" });
+      }
+
+      // Gemini with retry
+      for (const model of ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-pro-vision"]) {
         try {
           const gemRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -50,10 +55,12 @@ export async function POST(req: Request) {
             }
           );
           const gd = await gemRes.json();
+          console.log(`Gemini ${model} status:`, gemRes.status, JSON.stringify(gd).slice(0, 200));
           const reply = gd.candidates?.[0]?.content?.parts?.[0]?.text;
           if (reply) return NextResponse.json({ reply });
-          console.error("Gemini error:", JSON.stringify(gd).slice(0, 500));
-        } catch (e) { console.error("Gemini failed:", e); }
+          if (gd.error?.code === 404) continue; // try next model
+          break;
+        } catch (e) { console.error(`Gemini ${model} failed:`, e); }
       }
 
       // Fallback for images — Groq Vision
@@ -77,15 +84,42 @@ export async function POST(req: Request) {
           if (reply) return NextResponse.json({ reply });
         } catch (e) { console.error("Groq vision failed:", e); }
       }
-      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Dobara try karo!" });
+
+      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Kuch seconds baad dobara try karo! 🙏" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🔍 SMART SEARCH — Tavily + Serper + News
+    // 🔍 SMART SEARCH
+    // Sports/current events ke liye Serper best hai
+    // General ke liye Tavily
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
 
-    if (tavilyKey && cleanMsg.length > 2) {
+    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|tennis|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks)/i.test(cleanMsg);
+    const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live)/i.test(cleanMsg);
+
+    // Sports queries → Serper first (better for sports)
+    if ((isSportsQuery || isCurrentQuery) && serperKey) {
+      try {
+        const q = `${cleanMsg} ${new Date().getFullYear()}`;
+        const sRes = await fetch("https://google.serper.dev/search", {
+          method: "POST",
+          headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ q, gl: "in", hl: "hi", num: 8 }),
+        });
+        const sd = await sRes.json();
+        if (sd.answerBox?.answer) searchContext += `Direct Answer: ${sd.answerBox.answer}\n`;
+        if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
+        // Sports box
+        if (sd.sports) searchContext += `Sports: ${JSON.stringify(sd.sports)}\n\n`;
+        const results = sd.organic?.slice(0, 6) || [];
+        if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
+        console.log("Serper context length:", searchContext.length);
+      } catch (e) { console.error("Serper failed:", e); }
+    }
+
+    // General queries → Tavily
+    if (!searchContext && tavilyKey && cleanMsg.length > 2) {
       try {
         const tvRes = await fetch("https://api.tavily.com/search", {
           method: "POST",
@@ -108,31 +142,31 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Tavily failed:", e); }
     }
 
+    // Serper fallback for non-sports
     if (!searchContext && serperKey && cleanMsg.length > 2) {
       try {
-        const isCurrent = /(today|aaj|abhi|latest|current|price|rate|score|match|result|election|weather|kab|kahan|kaun|2025|2026)/i.test(cleanMsg);
-        const q = isCurrent ? `${cleanMsg} ${new Date().getFullYear()}` : cleanMsg;
         const sRes = await fetch("https://google.serper.dev/search", {
           method: "POST",
           headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ q, gl: "in", hl: "hi", num: 6 }),
+          body: JSON.stringify({ q: cleanMsg, gl: "in", hl: "hi", num: 6 }),
         });
         const sd = await sRes.json();
         if (sd.answerBox?.answer) searchContext = `Direct Answer: ${sd.answerBox.answer}\n\n`;
         if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
         const results = sd.organic?.slice(0, 5) || [];
         if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
-      } catch (e) { console.error("Serper failed:", e); }
+      } catch (e) { console.error("Serper fallback failed:", e); }
     }
 
+    // News API
     if (newsKey && /(news|khabar|headline|taza|samachar)/i.test(cleanMsg)) {
       try {
         const q = cleanMsg.replace(/(news|khabar|taza|samachar|headline)/gi, "").trim() || "India";
         const nr = await fetch(`https://newsapi.org/v2/top-headlines?country=in&pageSize=5&apiKey=${newsKey}&q=${encodeURIComponent(q)}`);
         const nd = await nr.json();
         if (nd.articles?.length > 0) {
-          const newsCtx = nd.articles.slice(0, 5).map((a: any, i: number) => `[${i+1}] ${a.title}\n${a.description||""}`).join("\n\n");
-          searchContext = searchContext ? searchContext + "\n\n" + newsCtx : newsCtx;
+          const newsCtx = nd.articles.slice(0, 5).map((a: any, i: number) => `[${i+1}] ${a.title}\n${a.description || ""}`).join("\n\n");
+          searchContext = (searchContext ? searchContext + "\n\n" : "") + newsCtx;
         }
       } catch (e) { console.error("News failed:", e); }
     }
@@ -141,18 +175,19 @@ export async function POST(req: Request) {
     // 🤖 MAIN CHAT — Groq Llama 3.3 70B
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa lekin Hinglish mein.
+Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa.
+Hinglish mein jawab de — clear, detailed aur accurate.
 
 STRICT RULES:
-- Agar search data diya gaya hai toh SIRF usi se jawab de — POORI detail ke saath, kuch bhi chhodo mat.
-- Agar search data clearly answer deta hai toh "mujhe pata nahi" KABHI mat bol — seedha answer do.
-- Agar search data relevant nahi hai toh apni knowledge se jawab de.
-- Context yaad rakho — "ye/woh/iska" ka matlab pichli baaton se samjho.
+- Search data mila hai toh POORI detail ke saath jawab de — team names, time, venue sab batao.
+- Search data clearly answer kare toh "mujhe pata nahi" KABHI mat bol.
+- Search data nahi mila toh apni knowledge use karo, clearly bol "Meri knowledge ke basis pe:".
+- Context yaad rakho.
 - Har jawab Namaste! se shuru karo.`;
 
     const userText = searchContext
-      ? `--- LIVE SEARCH DATA ---\n${searchContext}\n--- END ---\n\nSawaal: ${cleanMsg}`
-      : `Sawaal: ${cleanMsg}`;
+      ? `--- LIVE SEARCH DATA (isko use karke POORA jawab de) ---\n${searchContext}\n--- END ---\n\nUser ka sawaal: ${cleanMsg}`
+      : `User ka sawaal: ${cleanMsg}`;
 
     const chatRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",

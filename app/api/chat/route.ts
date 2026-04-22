@@ -20,50 +20,78 @@ export async function POST(req: Request) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (mode === "imagine") {
       const seed = Math.floor(Math.random() * 999999);
-      const encodedPrompt = encodeURIComponent(cleanMsg + ", high quality, detailed, 4k");
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanMsg + ", high quality, detailed, 4k")}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
       return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: imageUrl });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📄 FILE / IMAGE ANALYSIS — Gemini
+    // 📄 FILE / IMAGE ANALYSIS
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (fileBase64 || imageBase64) {
       const rawB64 = fileBase64 || (imageBase64?.includes(",") ? imageBase64.split(",")[1] : imageBase64);
       const mime = fileMime || (imageBase64?.startsWith("data:image/png") ? "image/png" : "image/jpeg");
-      const userQ = cleanMsg || "Is file ko detail mein analyze karo aur poori summary do.";
+      const userQ = cleanMsg || "Is file ko detail mein analyze karo aur poori summary do. Koi bhi important point mat chhodna.";
 
-      if (!geminiKey) {
-        return NextResponse.json({ reply: "Namaste! GEMINI_API_KEY Vercel mein set nahi hai. Please check karo!" });
-      }
-
-      // Gemini with retry
-      for (const model of ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-pro-vision"]) {
+      // Use Gemini for all files (images + PDFs)
+      if (geminiKey && rawB64) {
         try {
           const gemRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                contents: [{ parts: [
-                  { inline_data: { mime_type: mime, data: rawB64 } },
-                  { text: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}.\nHinglish mein detail mein jawab de. Namaste! se shuru karo.\n\nUser ka sawaal: ${userQ}` }
-                ]}],
-                generationConfig: { maxOutputTokens: 2048, temperature: 0.3 }
+                contents: [{
+                  parts: [
+                    {
+                      inline_data: {
+                        mime_type: mime,
+                        data: rawB64
+                      }
+                    },
+                    {
+                      text: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}.
+Hinglish mein POORI detail mein jawab de. Koi bhi point mat chhodna.
+Namaste! se shuru karo.
+
+User ka sawaal: ${userQ}`
+                    }
+                  ]
+                }],
+                generationConfig: {
+                  maxOutputTokens: 2048,
+                  temperature: 0.3
+                }
               }),
             }
           );
-          const gd = await gemRes.json();
-          console.log(`Gemini ${model} status:`, gemRes.status, JSON.stringify(gd).slice(0, 200));
+
+          const responseText = await gemRes.text();
+          console.log("Gemini raw response:", responseText.slice(0, 500));
+
+          let gd;
+          try { gd = JSON.parse(responseText); } catch { 
+            console.error("JSON parse failed:", responseText.slice(0, 200));
+            return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya (JSON error). Dobara try karo!" });
+          }
+
+          if (gd.error) {
+            console.error("Gemini API error:", gd.error);
+            return NextResponse.json({ reply: `Namaste! Gemini error: ${gd.error.message || "Unknown error"}. Dobara try karo!` });
+          }
+
           const reply = gd.candidates?.[0]?.content?.parts?.[0]?.text;
           if (reply) return NextResponse.json({ reply });
-          if (gd.error?.code === 404) continue; // try next model
-          break;
-        } catch (e) { console.error(`Gemini ${model} failed:`, e); }
+
+          console.error("No reply in Gemini response:", JSON.stringify(gd).slice(0, 300));
+        } catch (e) {
+          console.error("Gemini fetch failed:", e);
+        }
+      } else if (!geminiKey) {
+        console.error("GEMINI_API_KEY not found in environment");
       }
 
-      // Fallback for images — Groq Vision
+      // Image fallback — Groq Vision
       if (imageBase64) {
         try {
           const imgUrl = imageBase64.includes(",") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
@@ -85,21 +113,19 @@ export async function POST(req: Request) {
         } catch (e) { console.error("Groq vision failed:", e); }
       }
 
-      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Kuch seconds baad dobara try karo! 🙏" });
+      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Gemini API key Vercel mein check karo (`GEMINI_API_KEY`)!" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 🔍 SMART SEARCH
-    // Sports/current events ke liye Serper best hai
-    // General ke liye Tavily
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
 
-    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|tennis|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks)/i.test(cleanMsg);
-    const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live)/i.test(cleanMsg);
+    const isSports = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|tennis|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks|t20|odi|test match)/i.test(cleanMsg);
+    const isCurrent = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live|abhi)/i.test(cleanMsg);
 
-    // Sports queries → Serper first (better for sports)
-    if ((isSportsQuery || isCurrentQuery) && serperKey) {
+    // Sports + current events → Serper with year
+    if ((isSports || isCurrent) && serperKey) {
       try {
         const q = `${cleanMsg} ${new Date().getFullYear()}`;
         const sRes = await fetch("https://google.serper.dev/search", {
@@ -110,15 +136,12 @@ export async function POST(req: Request) {
         const sd = await sRes.json();
         if (sd.answerBox?.answer) searchContext += `Direct Answer: ${sd.answerBox.answer}\n`;
         if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
-        // Sports box
-        if (sd.sports) searchContext += `Sports: ${JSON.stringify(sd.sports)}\n\n`;
         const results = sd.organic?.slice(0, 6) || [];
         if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
-        console.log("Serper context length:", searchContext.length);
-      } catch (e) { console.error("Serper failed:", e); }
+      } catch (e) { console.error("Serper sports failed:", e); }
     }
 
-    // General queries → Tavily
+    // General → Tavily
     if (!searchContext && tavilyKey && cleanMsg.length > 2) {
       try {
         const tvRes = await fetch("https://api.tavily.com/search", {
@@ -142,7 +165,7 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Tavily failed:", e); }
     }
 
-    // Serper fallback for non-sports
+    // Serper fallback
     if (!searchContext && serperKey && cleanMsg.length > 2) {
       try {
         const sRes = await fetch("https://google.serper.dev/search", {
@@ -175,19 +198,19 @@ export async function POST(req: Request) {
     // 🤖 MAIN CHAT — Groq Llama 3.3 70B
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa.
+Tu India ka sabse helpful AI assistant hai.
 Hinglish mein jawab de — clear, detailed aur accurate.
 
-STRICT RULES:
-- Search data mila hai toh POORI detail ke saath jawab de — team names, time, venue sab batao.
-- Search data clearly answer kare toh "mujhe pata nahi" KABHI mat bol.
-- Search data nahi mila toh apni knowledge use karo, clearly bol "Meri knowledge ke basis pe:".
+RULES:
+- Agar search data diya gaya hai toh usi se SEEDHA jawab de. Team names, time, venue, score — sab kuch batao.
+- "Mujhe pata nahi" ya "aur data chahiye" KABHI mat bolna jab search data clearly available ho.
+- Agar search data mein koi information nahi hai sirf tab bol "Is baare mein latest info nahi mili."
 - Context yaad rakho.
 - Har jawab Namaste! se shuru karo.`;
 
     const userText = searchContext
-      ? `--- LIVE SEARCH DATA (isko use karke POORA jawab de) ---\n${searchContext}\n--- END ---\n\nUser ka sawaal: ${cleanMsg}`
-      : `User ka sawaal: ${cleanMsg}`;
+      ? `--- LIVE SEARCH DATA ---\n${searchContext}\n---\n\nSawaal: ${cleanMsg}`
+      : `Sawaal: ${cleanMsg}`;
 
     const chatRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -195,7 +218,7 @@ STRICT RULES:
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
         messages: [{ role: "system", content: systemPrompt }, ...history.slice(-10), { role: "user", content: userText }],
-        max_tokens: 2000, temperature: 0.2,
+        max_tokens: 2000, temperature: 0.15,
       }),
     });
 

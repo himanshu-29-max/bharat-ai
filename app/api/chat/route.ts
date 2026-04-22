@@ -10,9 +10,12 @@ export async function POST(req: Request) {
     const newsKey = process.env.NEWS_API_KEY?.trim();
     const geminiKey = process.env.GEMINI_API_KEY?.trim();
 
-    const aajKiDate = new Date().toLocaleDateString('en-IN', {
+    const now = new Date();
+    const aajKiDate = now.toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
+    // e.g. "22 April 2026"
+    const shortDate = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
     const cleanMsg = message?.trim() || "";
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -20,76 +23,65 @@ export async function POST(req: Request) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (mode === "imagine") {
       const seed = Math.floor(Math.random() * 999999);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanMsg + ", high quality, detailed, 4k")}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
+      const encodedPrompt = encodeURIComponent(cleanMsg + ", high quality, detailed, 4k");
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
       return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: imageUrl });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📄 FILE / IMAGE ANALYSIS
+    // 📄 FILE / IMAGE ANALYSIS — Gemini
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (fileBase64 || imageBase64) {
       const rawB64 = fileBase64 || (imageBase64?.includes(",") ? imageBase64.split(",")[1] : imageBase64);
       const mime = fileMime || (imageBase64?.startsWith("data:image/png") ? "image/png" : "image/jpeg");
-      const userQ = cleanMsg || "Is file ko detail mein analyze karo aur poori summary do. Koi bhi important point mat chhodna.";
+      const userQ = cleanMsg || "Is file ko detail mein analyze karo aur poori summary do.";
 
-      // Use Gemini for all files (images + PDFs)
-      if (geminiKey && rawB64) {
+      if (!geminiKey) {
+        return NextResponse.json({ reply: "Namaste! GEMINI_API_KEY Vercel mein set nahi hai!" });
+      }
+
+      // Try latest working Gemini models
+      const geminiModels = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-002",
+        "gemini-1.5-pro",
+      ];
+
+      let geminiReply = "";
+      for (const model of geminiModels) {
         try {
           const gemRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                contents: [{
-                  parts: [
-                    {
-                      inline_data: {
-                        mime_type: mime,
-                        data: rawB64
-                      }
-                    },
-                    {
-                      text: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}.
-Hinglish mein POORI detail mein jawab de. Koi bhi point mat chhodna.
-Namaste! se shuru karo.
-
-User ka sawaal: ${userQ}`
-                    }
-                  ]
-                }],
-                generationConfig: {
-                  maxOutputTokens: 2048,
-                  temperature: 0.3
-                }
+                contents: [{ parts: [
+                  { inline_data: { mime_type: mime, data: rawB64 } },
+                  { text: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}.\nHinglish mein detail mein jawab de. Namaste! se shuru karo.\n\nSawaal: ${userQ}` }
+                ]}],
+                generationConfig: { maxOutputTokens: 2048, temperature: 0.3 }
               }),
             }
           );
-
-          const responseText = await gemRes.text();
-          console.log("Gemini raw response:", responseText.slice(0, 500));
-
-          let gd;
-          try { gd = JSON.parse(responseText); } catch { 
-            console.error("JSON parse failed:", responseText.slice(0, 200));
-            return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya (JSON error). Dobara try karo!" });
-          }
-
-          if (gd.error) {
-            console.error("Gemini API error:", gd.error);
-            return NextResponse.json({ reply: `Namaste! Gemini error: ${gd.error.message || "Unknown error"}. Dobara try karo!` });
-          }
-
+          const gd = await gemRes.json();
           const reply = gd.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (reply) return NextResponse.json({ reply });
-
-          console.error("No reply in Gemini response:", JSON.stringify(gd).slice(0, 300));
+          if (reply) { geminiReply = reply; break; }
+          // If model not found, try next
+          if (gd.error?.status === "NOT_FOUND" || gd.error?.code === 404) {
+            console.log(`Model ${model} not found, trying next...`);
+            continue;
+          }
+          // Other error — log and break
+          console.error(`Gemini ${model} error:`, JSON.stringify(gd).slice(0, 300));
+          break;
         } catch (e) {
-          console.error("Gemini fetch failed:", e);
+          console.error(`Gemini ${model} exception:`, e);
         }
-      } else if (!geminiKey) {
-        console.error("GEMINI_API_KEY not found in environment");
       }
+
+      if (geminiReply) return NextResponse.json({ reply: geminiReply });
 
       // Image fallback — Groq Vision
       if (imageBase64) {
@@ -113,7 +105,7 @@ User ka sawaal: ${userQ}`
         } catch (e) { console.error("Groq vision failed:", e); }
       }
 
-      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Gemini API key Vercel mein check karo (`GEMINI_API_KEY`)!" });
+      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Kuch seconds baad dobara try karo! 🙏" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -121,24 +113,42 @@ User ka sawaal: ${userQ}`
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
 
-    const isSports = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|tennis|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks|t20|odi|test match)/i.test(cleanMsg);
-    const isCurrent = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live|abhi)/i.test(cleanMsg);
+    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|tennis|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks)/i.test(cleanMsg);
+    const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live)/i.test(cleanMsg);
 
-    // Sports + current events → Serper with year
-    if ((isSports || isCurrent) && serperKey) {
+    // Sports → Serper with exact date in query
+    if (isSportsQuery && serperKey) {
       try {
-        const q = `${cleanMsg} ${new Date().getFullYear()}`;
+        const q = `${cleanMsg} ${shortDate}`;
         const sRes = await fetch("https://google.serper.dev/search", {
           method: "POST",
           headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ q, gl: "in", hl: "hi", num: 8 }),
+          body: JSON.stringify({ q, gl: "in", hl: "en", num: 8 }),
         });
         const sd = await sRes.json();
         if (sd.answerBox?.answer) searchContext += `Direct Answer: ${sd.answerBox.answer}\n`;
         if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
+        if (sd.sportsResults) searchContext += `Sports Results: ${JSON.stringify(sd.sportsResults)}\n\n`;
         const results = sd.organic?.slice(0, 6) || [];
         if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
       } catch (e) { console.error("Serper sports failed:", e); }
+    }
+
+    // Current events → Serper
+    if (!searchContext && isCurrentQuery && serperKey) {
+      try {
+        const q = `${cleanMsg} ${shortDate}`;
+        const sRes = await fetch("https://google.serper.dev/search", {
+          method: "POST",
+          headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ q, gl: "in", hl: "hi", num: 6 }),
+        });
+        const sd = await sRes.json();
+        if (sd.answerBox?.answer) searchContext = `Direct Answer: ${sd.answerBox.answer}\n\n`;
+        if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
+        const results = sd.organic?.slice(0, 5) || [];
+        if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
+      } catch (e) { console.error("Serper current failed:", e); }
     }
 
     // General → Tavily
@@ -175,13 +185,12 @@ User ka sawaal: ${userQ}`
         });
         const sd = await sRes.json();
         if (sd.answerBox?.answer) searchContext = `Direct Answer: ${sd.answerBox.answer}\n\n`;
-        if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
         const results = sd.organic?.slice(0, 5) || [];
         if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
       } catch (e) { console.error("Serper fallback failed:", e); }
     }
 
-    // News API
+    // News
     if (newsKey && /(news|khabar|headline|taza|samachar)/i.test(cleanMsg)) {
       try {
         const q = cleanMsg.replace(/(news|khabar|taza|samachar|headline)/gi, "").trim() || "India";
@@ -195,21 +204,20 @@ User ka sawaal: ${userQ}`
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🤖 MAIN CHAT — Groq Llama 3.3 70B
+    // 🤖 MAIN CHAT
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Tu India ka sabse helpful AI assistant hai.
+Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa.
 Hinglish mein jawab de — clear, detailed aur accurate.
 
 RULES:
-- Agar search data diya gaya hai toh usi se SEEDHA jawab de. Team names, time, venue, score — sab kuch batao.
-- "Mujhe pata nahi" ya "aur data chahiye" KABHI mat bolna jab search data clearly available ho.
-- Agar search data mein koi information nahi hai sirf tab bol "Is baare mein latest info nahi mili."
+- Search data mila hai toh POORI detail ke saath jawab de — team names, time, venue, score sab batao.
+- "Mujhe pata nahi" tab bol jab search data mein bhi kuch na ho.
 - Context yaad rakho.
 - Har jawab Namaste! se shuru karo.`;
 
     const userText = searchContext
-      ? `--- LIVE SEARCH DATA ---\n${searchContext}\n---\n\nSawaal: ${cleanMsg}`
+      ? `--- LIVE DATA (${shortDate}) ---\n${searchContext}\n--- END ---\n\nSawaal: ${cleanMsg}`
       : `Sawaal: ${cleanMsg}`;
 
     const chatRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -218,7 +226,7 @@ RULES:
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
         messages: [{ role: "system", content: systemPrompt }, ...history.slice(-10), { role: "user", content: userText }],
-        max_tokens: 2000, temperature: 0.15,
+        max_tokens: 2000, temperature: 0.2,
       }),
     });
 

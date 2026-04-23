@@ -9,6 +9,7 @@ export async function POST(req: Request) {
     const tavilyKey = process.env.NEXT_PUBLIC_TAVILY_API_KEY?.trim();
     const newsKey = process.env.NEWS_API_KEY?.trim();
     const geminiKey = process.env.GEMINI_API_KEY?.trim();
+    const hfKey = process.env.HUGGINGFACE_API_KEY?.trim();
 
     const now = new Date();
     const aajKiDate = now.toLocaleDateString('en-IN', {
@@ -21,12 +22,49 @@ export async function POST(req: Request) {
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 🎨 IMAGE GENERATION
+    // Try Pollinations first, HuggingFace as fallback
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (mode === "imagine") {
-      const seed = Math.floor(Math.random() * 999999);
-      const encodedPrompt = encodeURIComponent(cleanMsg + ", high quality, detailed, 4k");
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
-      return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: imageUrl });
+      // Try HuggingFace FLUX first (more reliable, no rate limit)
+      if (hfKey) {
+        try {
+          const hfRes = await fetch(
+            "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+            {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${hfKey}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ inputs: cleanMsg + ", high quality, detailed, 4k", parameters: { num_inference_steps: 4 } }),
+            }
+          );
+          if (hfRes.ok) {
+            const buffer = await hfRes.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString("base64");
+            return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: `data:image/jpeg;base64,${base64}` });
+          }
+          const errText = await hfRes.text();
+          if (errText.includes("loading")) {
+            return NextResponse.json({ reply: "⏳ Image model warm up ho raha hai (~30 sec). Thoda wait karo aur dobara try karo!" });
+          }
+          console.error("HF error:", errText.slice(0, 200));
+        } catch (e) { console.error("HF failed:", e); }
+      }
+
+      // Fallback: Pollinations with retry
+      try {
+        const seed = Math.floor(Math.random() * 999999);
+        const encodedPrompt = encodeURIComponent(cleanMsg + ", high quality, detailed");
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=768&height=768&seed=${seed}&nologo=true&model=flux&enhance=false`;
+        // Fetch and convert to base64 to avoid CORS/rate-limit display issues
+        const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(25000) });
+        if (imgRes.ok) {
+          const buffer = await imgRes.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
+          const mime = imgRes.headers.get("content-type") || "image/jpeg";
+          return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: `data:${mime};base64,${base64}` });
+        }
+      } catch (e) { console.error("Pollinations failed:", e); }
+
+      return NextResponse.json({ reply: "Image generation fail ho gayi. Thodi der baad try karo! 🙏" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -41,7 +79,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ reply: "Namaste! GEMINI_API_KEY Vercel mein set nahi hai!" });
       }
 
-      // Use confirmed working models from test
+      // Use confirmed working models from test endpoint
       const geminiModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"];
 
       for (const model of geminiModels) {
@@ -63,13 +101,13 @@ export async function POST(req: Request) {
           const gd = await gemRes.json();
           const reply = gd.candidates?.[0]?.content?.parts?.[0]?.text;
           if (reply) return NextResponse.json({ reply });
-          if (gd.error?.status === "NOT_FOUND" || gd.error?.code === 404) { continue; }
+          if (gd.error?.status === "NOT_FOUND" || gd.error?.code === 404) { console.log(`${model} not found, trying next`); continue; }
           console.error(`Gemini ${model} error:`, JSON.stringify(gd).slice(0, 400));
           break;
         } catch (e) { console.error(`Gemini ${model} exception:`, e); }
       }
 
-      // Image fallback — Groq Vision
+      // Image-only fallback
       if (imageBase64) {
         try {
           const imgUrl = imageBase64.includes(",") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
@@ -99,7 +137,7 @@ export async function POST(req: Request) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
 
-    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|tennis|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks)/i.test(cleanMsg);
+    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks)/i.test(cleanMsg);
     const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live)/i.test(cleanMsg);
 
     if ((isSportsQuery || isCurrentQuery) && serperKey) {
@@ -128,9 +166,7 @@ export async function POST(req: Request) {
         });
         const tvData = await tvRes.json();
         if (tvData.answer) searchContext = `Direct Answer: ${tvData.answer}\n\n`;
-        if (tvData.results?.length > 0) {
-          searchContext += tvData.results.slice(0, 5).map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.content?.slice(0, 300) || ""}`).join("\n\n");
-        }
+        if (tvData.results?.length > 0) searchContext += tvData.results.slice(0, 5).map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.content?.slice(0, 300) || ""}`).join("\n\n");
       } catch (e) { console.error("Tavily failed:", e); }
     }
 
@@ -162,27 +198,20 @@ export async function POST(req: Request) {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🤖 MAIN CHAT — Groq with full conversation context
+    // 🤖 MAIN CHAT
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    // Build context summary from recent history for reference words like "ish", "woh", "uska"
-    const recentTopics = history.slice(-6)
-      .filter((h: any) => h.role === "user")
-      .map((h: any) => h.content)
-      .join(" | ");
+    const recentTopics = history.slice(-6).filter((h: any) => h.role === "user").map((h: any) => h.content).join(" | ");
 
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
 Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa.
 Hinglish mein jawab de — clear, detailed aur accurate.
 
-CONVERSATION CONTEXT (recent topics discussed):
-${recentTopics || "No previous context"}
+CONVERSATION CONTEXT: ${recentTopics || "No previous context"}
 
-STRICT RULES:
-- "ish college", "wahan", "uska", "iska", "ye", "woh" jaise words ka matlab CONVERSATION CONTEXT se samjho.
-- Agar user kisi topic ke baare mein pooch raha hai jo pehle discuss hua tha, toh USI topic ke baare mein jawab do.
+RULES:
+- "ish college/jagah/topic", "wahan", "uska", "iska", "ye", "woh" jaise words ka matlab CONVERSATION CONTEXT se samjho.
 - Search data mila hai toh POORI detail ke saath jawab de.
-- Agar search data relevant nahi toh apni knowledge use karo.
+- Agar search data nahi toh apni knowledge use karo.
 - Har jawab Namaste! se shuru karo.`;
 
     const userText = searchContext
@@ -194,11 +223,7 @@ STRICT RULES:
       headers: { "Authorization": `Bearer ${groqKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...history.slice(-12), // More history for better context
-          { role: "user", content: userText }
-        ],
+        messages: [{ role: "system", content: systemPrompt }, ...history.slice(-12), { role: "user", content: userText }],
         max_tokens: 2000, temperature: 0.2,
       }),
     });

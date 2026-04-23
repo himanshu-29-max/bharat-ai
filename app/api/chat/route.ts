@@ -14,8 +14,9 @@ export async function POST(req: Request) {
     const aajKiDate = now.toLocaleDateString('en-IN', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata'
     });
-    // e.g. "22 April 2026"
-    const shortDate = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
+    const shortDate = now.toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata'
+    });
     const cleanMsg = message?.trim() || "";
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -40,15 +41,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ reply: "Namaste! GEMINI_API_KEY Vercel mein set nahi hai!" });
       }
 
-      // Try latest working Gemini models
-      const geminiModels = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-002",
-        "gemini-1.5-pro",
-      ];
+      // Use confirmed working models from test
+      const geminiModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"];
 
-      let geminiReply = "";
       for (const model of geminiModels) {
         try {
           const gemRes = await fetch(
@@ -67,21 +62,12 @@ export async function POST(req: Request) {
           );
           const gd = await gemRes.json();
           const reply = gd.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (reply) { geminiReply = reply; break; }
-          // If model not found, try next
-          if (gd.error?.status === "NOT_FOUND" || gd.error?.code === 404) {
-            console.log(`Model ${model} not found, trying next...`);
-            continue;
-          }
-          // Other error — log and break
-          console.error(`Gemini ${model} error:`, JSON.stringify(gd).slice(0, 300));
+          if (reply) return NextResponse.json({ reply });
+          if (gd.error?.status === "NOT_FOUND" || gd.error?.code === 404) { continue; }
+          console.error(`Gemini ${model} error:`, JSON.stringify(gd).slice(0, 400));
           break;
-        } catch (e) {
-          console.error(`Gemini ${model} exception:`, e);
-        }
+        } catch (e) { console.error(`Gemini ${model} exception:`, e); }
       }
-
-      if (geminiReply) return NextResponse.json({ reply: geminiReply });
 
       // Image fallback — Groq Vision
       if (imageBase64) {
@@ -105,7 +91,7 @@ export async function POST(req: Request) {
         } catch (e) { console.error("Groq vision failed:", e); }
       }
 
-      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Kuch seconds baad dobara try karo! 🙏" });
+      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Thodi der baad dobara try karo! 🙏" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -116,8 +102,7 @@ export async function POST(req: Request) {
     const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|tennis|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks)/i.test(cleanMsg);
     const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live)/i.test(cleanMsg);
 
-    // Sports → Serper with exact date in query
-    if (isSportsQuery && serperKey) {
+    if ((isSportsQuery || isCurrentQuery) && serperKey) {
       try {
         const q = `${cleanMsg} ${shortDate}`;
         const sRes = await fetch("https://google.serper.dev/search", {
@@ -128,54 +113,27 @@ export async function POST(req: Request) {
         const sd = await sRes.json();
         if (sd.answerBox?.answer) searchContext += `Direct Answer: ${sd.answerBox.answer}\n`;
         if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
-        if (sd.sportsResults) searchContext += `Sports Results: ${JSON.stringify(sd.sportsResults)}\n\n`;
+        if (sd.sportsResults) searchContext += `Sports: ${JSON.stringify(sd.sportsResults)}\n\n`;
         const results = sd.organic?.slice(0, 6) || [];
         if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
       } catch (e) { console.error("Serper sports failed:", e); }
     }
 
-    // Current events → Serper
-    if (!searchContext && isCurrentQuery && serperKey) {
-      try {
-        const q = `${cleanMsg} ${shortDate}`;
-        const sRes = await fetch("https://google.serper.dev/search", {
-          method: "POST",
-          headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ q, gl: "in", hl: "hi", num: 6 }),
-        });
-        const sd = await sRes.json();
-        if (sd.answerBox?.answer) searchContext = `Direct Answer: ${sd.answerBox.answer}\n\n`;
-        if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
-        const results = sd.organic?.slice(0, 5) || [];
-        if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
-      } catch (e) { console.error("Serper current failed:", e); }
-    }
-
-    // General → Tavily
     if (!searchContext && tavilyKey && cleanMsg.length > 2) {
       try {
         const tvRes = await fetch("https://api.tavily.com/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: tavilyKey,
-            query: cleanMsg,
-            search_depth: "basic",
-            max_results: 5,
-            include_answer: true,
-          }),
+          body: JSON.stringify({ api_key: tavilyKey, query: cleanMsg, search_depth: "basic", max_results: 5, include_answer: true }),
         });
         const tvData = await tvRes.json();
         if (tvData.answer) searchContext = `Direct Answer: ${tvData.answer}\n\n`;
         if (tvData.results?.length > 0) {
-          searchContext += tvData.results.slice(0, 5)
-            .map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.content?.slice(0, 300) || ""}`)
-            .join("\n\n");
+          searchContext += tvData.results.slice(0, 5).map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.content?.slice(0, 300) || ""}`).join("\n\n");
         }
       } catch (e) { console.error("Tavily failed:", e); }
     }
 
-    // Serper fallback
     if (!searchContext && serperKey && cleanMsg.length > 2) {
       try {
         const sRes = await fetch("https://google.serper.dev/search", {
@@ -185,12 +143,12 @@ export async function POST(req: Request) {
         });
         const sd = await sRes.json();
         if (sd.answerBox?.answer) searchContext = `Direct Answer: ${sd.answerBox.answer}\n\n`;
+        if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}\n\n`;
         const results = sd.organic?.slice(0, 5) || [];
         if (results.length > 0) searchContext += results.map((r: any, i: number) => `[${i+1}] ${r.title}\n${r.snippet}`).join("\n\n");
       } catch (e) { console.error("Serper fallback failed:", e); }
     }
 
-    // News
     if (newsKey && /(news|khabar|headline|taza|samachar)/i.test(cleanMsg)) {
       try {
         const q = cleanMsg.replace(/(news|khabar|taza|samachar|headline)/gi, "").trim() || "India";
@@ -204,16 +162,27 @@ export async function POST(req: Request) {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🤖 MAIN CHAT
+    // 🤖 MAIN CHAT — Groq with full conversation context
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // Build context summary from recent history for reference words like "ish", "woh", "uska"
+    const recentTopics = history.slice(-6)
+      .filter((h: any) => h.role === "user")
+      .map((h: any) => h.content)
+      .join(" | ");
+
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
 Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa.
 Hinglish mein jawab de — clear, detailed aur accurate.
 
-RULES:
-- Search data mila hai toh POORI detail ke saath jawab de — team names, time, venue, score sab batao.
-- "Mujhe pata nahi" tab bol jab search data mein bhi kuch na ho.
-- Context yaad rakho.
+CONVERSATION CONTEXT (recent topics discussed):
+${recentTopics || "No previous context"}
+
+STRICT RULES:
+- "ish college", "wahan", "uska", "iska", "ye", "woh" jaise words ka matlab CONVERSATION CONTEXT se samjho.
+- Agar user kisi topic ke baare mein pooch raha hai jo pehle discuss hua tha, toh USI topic ke baare mein jawab do.
+- Search data mila hai toh POORI detail ke saath jawab de.
+- Agar search data relevant nahi toh apni knowledge use karo.
 - Har jawab Namaste! se shuru karo.`;
 
     const userText = searchContext
@@ -225,7 +194,11 @@ RULES:
       headers: { "Authorization": `Bearer ${groqKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        messages: [{ role: "system", content: systemPrompt }, ...history.slice(-10), { role: "user", content: userText }],
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...history.slice(-12), // More history for better context
+          { role: "user", content: userText }
+        ],
         max_tokens: 2000, temperature: 0.2,
       }),
     });

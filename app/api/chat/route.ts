@@ -22,10 +22,9 @@ export async function POST(req: Request) {
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 🎨 IMAGE GENERATION
-    // Try Pollinations first, HuggingFace as fallback
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (mode === "imagine") {
-      // Try HuggingFace FLUX first (more reliable, no rate limit)
+      // HuggingFace FLUX primary
       if (hfKey) {
         try {
           const hfRes = await fetch(
@@ -33,7 +32,10 @@ export async function POST(req: Request) {
             {
               method: "POST",
               headers: { "Authorization": `Bearer ${hfKey}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ inputs: cleanMsg + ", high quality, detailed, 4k", parameters: { num_inference_steps: 4 } }),
+              body: JSON.stringify({
+                inputs: cleanMsg + ", high quality, detailed, 4k, photorealistic",
+                parameters: { num_inference_steps: 4, guidance_scale: 0 }
+              }),
             }
           );
           if (hfRes.ok) {
@@ -43,24 +45,24 @@ export async function POST(req: Request) {
           }
           const errText = await hfRes.text();
           if (errText.includes("loading")) {
-            return NextResponse.json({ reply: "⏳ Image model warm up ho raha hai (~30 sec). Thoda wait karo aur dobara try karo!" });
+            return NextResponse.json({ reply: "⏳ Model warm up ho raha hai (~30 sec). Thoda wait karo aur dobara try karo!" });
           }
-          console.error("HF error:", errText.slice(0, 200));
+          // Safety filter blocked
+          if (errText.includes("unsafe") || errText.includes("nsfw") || hfRes.status === 400) {
+            return NextResponse.json({ reply: "⚠️ Is prompt ki image generate nahi ho sakti. Koi aur description try karo!" });
+          }
         } catch (e) { console.error("HF failed:", e); }
       }
 
-      // Fallback: Pollinations with retry
+      // Pollinations fallback
       try {
         const seed = Math.floor(Math.random() * 999999);
-        const encodedPrompt = encodeURIComponent(cleanMsg + ", high quality, detailed");
-        const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=768&height=768&seed=${seed}&nologo=true&model=flux&enhance=false`;
-        // Fetch and convert to base64 to avoid CORS/rate-limit display issues
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanMsg + ", high quality, 4k")}?width=768&height=768&seed=${seed}&nologo=true&model=flux`;
         const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(25000) });
         if (imgRes.ok) {
           const buffer = await imgRes.arrayBuffer();
           const base64 = Buffer.from(buffer).toString("base64");
-          const mime = imgRes.headers.get("content-type") || "image/jpeg";
-          return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: `data:${mime};base64,${base64}` });
+          return NextResponse.json({ reply: "✅ Yeh rahi teri image!", generatedImage: `data:image/jpeg;base64,${base64}` });
         }
       } catch (e) { console.error("Pollinations failed:", e); }
 
@@ -68,7 +70,7 @@ export async function POST(req: Request) {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📄 FILE / IMAGE ANALYSIS — Gemini
+    // 📄 PDF / IMAGE ANALYSIS — Gemini Direct API
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (fileBase64 || imageBase64) {
       const rawB64 = fileBase64 || (imageBase64?.includes(",") ? imageBase64.split(",")[1] : imageBase64);
@@ -76,38 +78,63 @@ export async function POST(req: Request) {
       const userQ = cleanMsg || "Is file ko detail mein analyze karo aur poori summary do.";
 
       if (!geminiKey) {
-        return NextResponse.json({ reply: "Namaste! GEMINI_API_KEY Vercel mein set nahi hai!" });
+        return NextResponse.json({ reply: "Namaste! GEMINI_API_KEY set nahi hai Vercel mein!" });
       }
 
-      // Use confirmed working models from test endpoint
-      const geminiModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"];
+      // Use Google's @google/generative-ai compatible endpoint
+      // Models confirmed available from test: gemini-2.5-flash, gemini-2.0-flash, gemini-2.0-flash-001
+      const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"];
 
-      for (const model of geminiModels) {
+      for (const model of models) {
         try {
-          const gemRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ parts: [
-                  { inline_data: { mime_type: mime, data: rawB64 } },
-                  { text: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}.\nHinglish mein detail mein jawab de. Namaste! se shuru karo.\n\nSawaal: ${userQ}` }
-                ]}],
-                generationConfig: { maxOutputTokens: 2048, temperature: 0.3 }
-              }),
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+          const payload = {
+            contents: [{
+              role: "user",
+              parts: [
+                { inline_data: { mime_type: mime, data: rawB64 } },
+                { text: `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj: ${aajKiDate}.\nHinglish mein detail mein jawab de. Namaste! se shuru karo.\n\nSawaal: ${userQ}` }
+              ]
+            }],
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 2048,
             }
-          );
-          const gd = await gemRes.json();
+          };
+
+          const gemRes = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          const responseText = await gemRes.text();
+          let gd: any;
+          try { gd = JSON.parse(responseText); } catch { console.error("JSON parse failed:", responseText.slice(0, 200)); continue; }
+
+          if (gd.error) {
+            console.error(`Gemini ${model} error:`, gd.error.message, "status:", gd.error.status);
+            if (gd.error.status === "NOT_FOUND" || gd.error.code === 404) continue;
+            if (gd.error.status === "INVALID_ARGUMENT") {
+              return NextResponse.json({ reply: `Namaste! File format support nahi hota. PDF ke liye proper PDF bhejo! Error: ${gd.error.message}` });
+            }
+            break;
+          }
+
           const reply = gd.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (reply) return NextResponse.json({ reply });
-          if (gd.error?.status === "NOT_FOUND" || gd.error?.code === 404) { console.log(`${model} not found, trying next`); continue; }
-          console.error(`Gemini ${model} error:`, JSON.stringify(gd).slice(0, 400));
+          if (reply) {
+            console.log(`Gemini ${model} success!`);
+            return NextResponse.json({ reply });
+          }
+
+          console.error(`Gemini ${model} no reply:`, JSON.stringify(gd).slice(0, 300));
           break;
-        } catch (e) { console.error(`Gemini ${model} exception:`, e); }
+        } catch (e) {
+          console.error(`Gemini ${model} exception:`, e);
+        }
       }
 
-      // Image-only fallback
+      // Image-only fallback via Groq
       if (imageBase64) {
         try {
           const imgUrl = imageBase64.includes(",") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
@@ -129,7 +156,7 @@ export async function POST(req: Request) {
         } catch (e) { console.error("Groq vision failed:", e); }
       }
 
-      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Thodi der baad dobara try karo! 🙏" });
+      return NextResponse.json({ reply: "Namaste! File analyze nahi ho paya. Kuch seconds baad dobara try karo! 🙏" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -137,8 +164,8 @@ export async function POST(req: Request) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
 
-    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|psl|csk|rcb|mi |kkr|dc |rr |srh|gt |lsg|pbks)/i.test(cleanMsg);
-    const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live)/i.test(cleanMsg);
+    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|psl|csk|rcb|\bmi\b|kkr|\bdc\b|\brr\b|srh|\bgt\b|lsg|pbks)/i.test(cleanMsg);
+    const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live|abhi)/i.test(cleanMsg);
 
     if ((isSportsQuery || isCurrentQuery) && serperKey) {
       try {
@@ -198,20 +225,25 @@ export async function POST(req: Request) {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🤖 MAIN CHAT
+    // 🤖 MAIN CHAT — Groq Llama 3.3 70B
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const recentTopics = history.slice(-6).filter((h: any) => h.role === "user").map((h: any) => h.content).join(" | ");
+    const recentTopics = history.slice(-6)
+      .filter((h: any) => h.role === "user")
+      .map((h: any) => h.content)
+      .join(" | ");
 
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa.
-Hinglish mein jawab de — clear, detailed aur accurate.
+Tu India ka sabse helpful AI assistant hai — bilkul ChatGPT/Gemini jaisa lekin Hinglish mein.
+Accurate, detailed aur helpful responses de.
 
-CONVERSATION CONTEXT: ${recentTopics || "No previous context"}
+RECENT TOPICS: ${recentTopics || "None"}
 
 RULES:
-- "ish college/jagah/topic", "wahan", "uska", "iska", "ye", "woh" jaise words ka matlab CONVERSATION CONTEXT se samjho.
-- Search data mila hai toh POORI detail ke saath jawab de.
+- "ish college/jagah", "wahan", "uska", "iska", "ye", "woh" = RECENT TOPICS se samjho.
+- Search data mila hai toh POORI detail ke saath jawab de — kuch chhodo mat.
 - Agar search data nahi toh apni knowledge use karo.
+- Code ke liye markdown code blocks.
+- Math step by step solve karo.
 - Har jawab Namaste! se shuru karo.`;
 
     const userText = searchContext
@@ -223,14 +255,22 @@ RULES:
       headers: { "Authorization": `Bearer ${groqKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        messages: [{ role: "system", content: systemPrompt }, ...history.slice(-12), { role: "user", content: userText }],
-        max_tokens: 2000, temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...history.slice(-12),
+          { role: "user", content: userText }
+        ],
+        max_tokens: 2000,
+        temperature: 0.2,
       }),
     });
 
     const chatData = await chatRes.json();
     const reply = chatData.choices?.[0]?.message?.content;
-    if (!reply) { console.error("Groq error:", JSON.stringify(chatData)); return NextResponse.json({ reply: "Kuch technical dikkat aayi, dobara try karo! 🙏" }); }
+    if (!reply) {
+      console.error("Groq error:", JSON.stringify(chatData));
+      return NextResponse.json({ reply: "Kuch technical dikkat aayi, dobara try karo! 🙏" });
+    }
     return NextResponse.json({ reply });
 
   } catch (err) {

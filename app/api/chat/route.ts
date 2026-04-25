@@ -164,8 +164,10 @@ export async function POST(req: Request) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
 
-    const isSportsQuery = /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|psl|csk|rcb|\bmi\b|kkr|\bdc\b|\brr\b|srh|\bgt\b|lsg|pbks)/i.test(cleanMsg);
-    const isCurrentQuery = /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live|abhi)/i.test(cleanMsg);
+    // Don't search for greetings or very short messages
+    const isGreeting = /^(hello|hi|hey|namaste|hii|helo|sup|yo|kya haal|kaise ho|how are you|good morning|good night|thanks|thank you|ok|okay|haan|nahi|han|nhi)$/i.test(cleanMsg.trim());
+    const isSportsQuery = !isGreeting && /(ipl|cricket|match|score|wicket|run|team|player|tournament|league|football|kabaddi|psl|csk|rcb|\bmi\b|kkr|\bdc\b|\brr\b|srh|\bgt\b|lsg|pbks)/i.test(cleanMsg);
+    const isCurrentQuery = !isGreeting && cleanMsg.length > 5 && /(today|aaj|abhi|kal|latest|current|price|rate|result|election|weather|kab|kahan|kaun|2025|2026|live)/i.test(cleanMsg);
 
     if ((isSportsQuery || isCurrentQuery) && serperKey) {
       try {
@@ -184,7 +186,7 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Serper sports failed:", e); }
     }
 
-    if (!searchContext && tavilyKey && cleanMsg.length > 2) {
+    if (!searchContext && !isGreeting && tavilyKey && cleanMsg.length > 5) {
       try {
         const tvRes = await fetch("https://api.tavily.com/search", {
           method: "POST",
@@ -197,7 +199,7 @@ export async function POST(req: Request) {
       } catch (e) { console.error("Tavily failed:", e); }
     }
 
-    if (!searchContext && serperKey && cleanMsg.length > 2) {
+    if (!searchContext && !isGreeting && serperKey && cleanMsg.length > 5) {
       try {
         const sRes = await fetch("https://google.serper.dev/search", {
           method: "POST",

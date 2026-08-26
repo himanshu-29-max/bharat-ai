@@ -20,20 +20,17 @@ export async function POST(req: Request) {
     // 1. Direct Greetings
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(cleanMsg.toLowerCase());
     if (isGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
-      return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis baare mein jaankari chahiye?" });
+      return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis vishay mein jaankari chahiye?" });
     }
 
-    // 2. Smart Query Builder (Clean context detection)
-    const isContextual = /^(unka|inka|uska|iska|wahan|ye|woh|aur|then|who is he|who is she|unke|inke)$/i.test(cleanMsg) || cleanMsg.split(" ").length <= 3;
+    // 2. Strict Topic Isolation (Do not mix states/entities)
+    // Agar query mein direct entity (Delhi, Bihar, UP, DM, CM, PM) hai toh fresh search hogi
+    const hasExplicitEntity = /(delhi|bihar|up|mumbai|kolkata|punjab|haryana|gujarat|rajasthan|cm|dm|pm|governor|mayor)/i.test(cleanMsg);
     
     let fullSearchQuery = cleanMsg;
-    if (isContextual && Array.isArray(history) && history.length > 0) {
+    if (!hasExplicitEntity && Array.isArray(history) && history.length > 0) {
       const lastUserMsg = [...history].reverse().find((h: any) => h.role === "user")?.content || "";
-      // Only combine if the message doesn't introduce an independent topic like "darbhanga dm"
-      const hasIndependentEntity = /(dm|collector|sp|mla|mp|minister|university|college|weather|population)/i.test(cleanMsg);
-      if (!hasIndependentEntity) {
-        fullSearchQuery = `${lastUserMsg} ${cleanMsg}`;
-      }
+      fullSearchQuery = `${lastUserMsg} ${cleanMsg}`;
     }
 
     // 3. Real-time Search via Tavily
@@ -62,9 +59,11 @@ export async function POST(req: Request) {
     }
 
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-User ke current sawaal ka exact, direct aur clean Hinglish mein jawab do.
-Jo sawaal pucha gaya hai sirf usi ka jawab do. Pichle un-related topics (jaise Deputy CM agar DM pucha gaya hai) ko faltu mein mention mat karo.
-Har jawab Namaste! se shuru karo.`;
+User ke sawaal ka bilkul clear, accurate aur direct Hinglish mein jawab do.
+STRICT RULES:
+- Jo specific location ya post pucha gaya hai (e.g., Delhi CM, Bihar DM) sirf usi par focus karo. Doosre states ka data mix mat karo.
+- Raw news website names (jaise hindustantimes, ndtv, india today) ya messy links bilkul mat bolo.
+- Har jawab Namaste! se shuru karo.`;
 
     const formattedHistory = Array.isArray(history)
       ? history
@@ -77,7 +76,7 @@ Har jawab Namaste! se shuru karo.`;
       ? `Live Search Information:\n${searchContext}\n\nCurrent Question: ${cleanMsg}`
       : cleanMsg;
 
-    // 4. Groq API Call
+    // 4. Primary: Groq API Execution
     if (groqKey) {
       try {
         const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -104,13 +103,17 @@ Har jawab Namaste! se shuru karo.`;
           return NextResponse.json({ reply });
         }
       } catch (e) {
-        console.error("Groq error:", e);
+        console.error("Groq execution error:", e);
       }
     }
 
-    // 5. Clean Fallback
+    // 5. Cleaned Fallback (Stripping source domains/publishers)
     if (searchContext) {
-      const cleanText = searchContext.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
+      const cleanText = searchContext
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/(hindustantimes|ndtv|indiatoday|times of india|the hindu|indian express)/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
       const sentences = cleanText.split(/(?<=[.?!])\s+/);
       const safeSummary = sentences.slice(0, 2).join(' ');
       return NextResponse.json({ reply: `Namaste! Taaza jaankari ke anusaar: ${safeSummary}` });
@@ -119,7 +122,7 @@ Har jawab Namaste! se shuru karo.`;
     return NextResponse.json({ reply: "Namaste! Kripya thodi der baad dobara poochiye." });
 
   } catch (err) {
-    console.error("Route error:", err);
-    return NextResponse.json({ reply: "Namaste! Server error aaya hai." });
+    console.error("Chat route crash:", err);
+    return NextResponse.json({ reply: "Namaste! Server me takneeki samasya aayi hai." });
   }
 }

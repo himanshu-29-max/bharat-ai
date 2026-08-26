@@ -23,54 +23,61 @@ export async function POST(req: Request) {
       .trim() || cleanMsg;
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📸 1. REAL PHOTO ENGINE (Direct Web Search & Wikipedia Thumbnail)
+    // 📸 1. EXACT REAL PHOTO SEARCH
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (isImageMode) {
       let realImageUrl = "";
 
-      // Step A: Wikipedia Live Page Image Search (Sabse Accurate Real Photos)
-      try {
-        const wikiSearchRes = await fetch(
-          `https://en.wikipedia.org/w/api.php?action=query&origin=*&format=json&generator=search&gsrnamespace=0&gsrlimit=1&gsrsearch=${encodeURIComponent(cleanEntity)}&prop=pageimages&pithumbsize=1200`
-        );
-        const wikiData = await wikiSearchRes.json();
-        const pages = wikiData?.query?.pages;
-        if (pages) {
-          const firstPageKey = Object.keys(pages)[0];
-          if (pages[firstPageKey]?.thumbnail?.source) {
-            realImageUrl = pages[firstPageKey].thumbnail.source;
-          }
-        }
-      } catch (e) {
-        console.error("Wikipedia image scrape failed:", e);
-      }
-
-      // Step B: Tavily Live Images Search
-      if (!realImageUrl && tavilyKey) {
+      // Step A: Priority 1 - Exact Tavily Web Image Search
+      if (tavilyKey) {
         try {
           const tvRes = await fetch("https://api.tavily.com/search", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               api_key: tavilyKey,
-              query: `${cleanEntity} campus building official photo`,
-              search_depth: "basic",
+              query: `"${cleanEntity}" campus building photo official`,
+              search_depth: "advanced",
               include_images: true,
               max_results: 5
             }),
           });
           const tvData = await tvRes.json();
           if (tvData.images && tvData.images.length > 0) {
-            // Filter valid image URLs
-            const validImg = tvData.images.find((img: string) => img.startsWith("http") && !img.includes("favicon"));
-            if (validImg) realImageUrl = validImg;
+            // Find an image that doesn't belong to random irrelevant scrapers
+            const valid = tvData.images.find((u: string) => 
+              typeof u === "string" && 
+              u.startsWith("http") && 
+              !u.includes("logo") && 
+              !u.includes("icon") && 
+              !u.includes("avatar")
+            );
+            if (valid) realImageUrl = valid;
           }
         } catch (e) {
-          console.error("Tavily image error:", e);
+          console.error("Tavily advanced photo fetch failed:", e);
         }
       }
 
-      // Agar Real Photo mil gayi toh direct actual picture return karein
+      // Step B: Direct Exact Title Wikipedia Search (Only if exact match)
+      if (!realImageUrl) {
+        try {
+          const wikiRes = await fetch(
+            `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(cleanEntity)}&prop=pageimages&format=json&pithumbsize=1200&origin=*`
+          );
+          const wikiData = await wikiRes.json();
+          const pages = wikiData?.query?.pages;
+          if (pages) {
+            const pageId = Object.keys(pages)[0];
+            if (pageId !== "-1" && pages[pageId]?.thumbnail?.source) {
+              realImageUrl = pages[pageId].thumbnail.source;
+            }
+          }
+        } catch (e) {
+          console.error("Wiki photo error:", e);
+        }
+      }
+
       if (realImageUrl) {
         return NextResponse.json({
           reply: `✅ Yeh rahi **${cleanEntity}** ki real photograph!`,
@@ -78,10 +85,10 @@ export async function POST(req: Request) {
         });
       }
 
-      // Step C: Creative Fallback with Photorealistic Prompting (Only if real photo is not found on web)
+      // Step C: Fallback AI Realism Generation
       try {
         const seed = Math.floor(Math.random() * 999999);
-        const promptParam = encodeURIComponent(`Authentic real-life documentary photograph of ${cleanEntity}, 8k resolution, shot on DSLR, natural lighting, actual campus architecture, highly realistic`);
+        const promptParam = encodeURIComponent(`Authentic real-life photograph of ${cleanEntity}, actual architecture, daytime daylight, 8k resolution`);
         const fallbackUrl = `https://image.pollinations.ai/prompt/${promptParam}?width=1024&height=768&seed=${seed}&nologo=true&model=flux-realism`;
 
         const imgRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(20000) });
@@ -94,14 +101,14 @@ export async function POST(req: Request) {
           });
         }
       } catch (e) {
-        console.error("Image generation failed:", e);
+        console.error("Fallback generation failed:", e);
       }
 
       return NextResponse.json({ reply: "Image fetch karne me samasya aayi, kripya dobara try karein!" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 💬 2. CHAT & CONVERSATION ENGINE
+    // 💬 2. CHAT HANDLER
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
@@ -129,7 +136,7 @@ export async function POST(req: Request) {
           searchContext += tvData.results.map((r: any) => r.content || "").join(" ");
         }
       } catch (err) {
-        console.error("Tavily text error:", err);
+        console.error("Tavily error:", err);
       }
     }
 
@@ -173,7 +180,7 @@ User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence comple
           return NextResponse.json({ reply });
         }
       } catch (e) {
-        console.error("Groq execution failed:", e);
+        console.error("Groq error:", e);
       }
     }
 
@@ -185,7 +192,7 @@ User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence comple
     return NextResponse.json({ reply: "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye." });
 
   } catch (err) {
-    console.error("Chat fatal error:", err);
+    console.error("Fatal chat error:", err);
     return NextResponse.json({ reply: "Namaste! Server issue aaya hai, kripya refresh karein." });
   }
 }

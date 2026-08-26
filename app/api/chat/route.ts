@@ -17,32 +17,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Namaste! Kuch poochiye." });
     }
 
-    // 1. Direct Greetings
-    const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(cleanMsg.toLowerCase());
-    if (isGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
-      return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis vishay mein jaankari chahiye?" });
-    }
+    // 1. CHATGPT / GEMINI STYLE INTENT CLASSIFICATION
+    // Casual chit-chat / greetings ko search se isolate karein
+    const isCasualChat = /^(hi|hello|hey|namaste|hii|helo|kaise ho|kya haal|kya hal|sab badhiya|aur batao|kya chal raha hai|kya haal chal|kya haal samachar|haal chaal|haal samachar|sup|yo|wassup|who are you|kon ho|kya kr rhe ho)$/i.test(
+      cleanMsg.replace(/[?.,!]/g, "").trim().toLowerCase()
+    );
 
-    // 2. Strict Topic Isolation (Do not mix states/entities)
-    // Agar query mein direct entity (Delhi, Bihar, UP, DM, CM, PM) hai toh fresh search hogi
-    const hasExplicitEntity = /(delhi|bihar|up|mumbai|kolkata|punjab|haryana|gujarat|rajasthan|cm|dm|pm|governor|mayor)/i.test(cleanMsg);
-    
-    let fullSearchQuery = cleanMsg;
-    if (!hasExplicitEntity && Array.isArray(history) && history.length > 0) {
-      const lastUserMsg = [...history].reverse().find((h: any) => h.role === "user")?.content || "";
-      fullSearchQuery = `${lastUserMsg} ${cleanMsg}`;
-    }
+    // Explicit current news/facts trigger
+    const needsWebSearch = !isCasualChat && cleanMsg.length > 3 && /(aaj ka|today|latest|current|cm|dm|pm|nifty|sensex|share price|score|match|weather|taaza khabar|headline|result|election)/i.test(cleanMsg);
 
-    // 3. Real-time Search via Tavily
+    // 2. SEARCH ONLY WHEN ACTUALLY NEEDED
     let searchContext = "";
-    if (tavilyKey && cleanMsg.length > 2 && !isGreeting) {
+    if (needsWebSearch && tavilyKey) {
       try {
         const tvRes = await fetch("https://api.tavily.com/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_key: tavilyKey,
-            query: `${fullSearchQuery} latest official`,
+            query: `${cleanMsg} India updates`,
             search_depth: "basic",
             max_results: 3,
             include_answer: true
@@ -58,25 +51,28 @@ export async function POST(req: Request) {
       }
     }
 
-    const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-User ke sawaal ka bilkul clear, accurate aur direct Hinglish mein jawab do.
-STRICT RULES:
-- Jo specific location ya post pucha gaya hai (e.g., Delhi CM, Bihar DM) sirf usi par focus karo. Doosre states ka data mix mat karo.
-- Raw news website names (jaise hindustantimes, ndtv, india today) ya messy links bilkul mat bolo.
-- Har jawab Namaste! se shuru karo.`;
+    // 3. GEMINI/CHATGPT STYLE SYSTEM PERSONA
+    const systemPrompt = `Tu Bharat AI hai, jise develop kiya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
+Aap ek smart, friendly, intelligent aur adaptive AI companion ho (bilkul ChatGPT/Gemini ki tarah).
+
+BEHAVIOR RULES:
+1. Agar user casual baat kare ("kya haal chal", "kaise ho", "aur batao"), toh natural dost ki tarah casual, warm aur conversational Hinglish me reply do. Faltu me news headlines dump mat karo.
+2. Agar user koi factual/current question puche, toh search data ka use karke seedha aur accurate answer do.
+3. Hashtags (#), raw URLs, ya media credits (FilterCopy, Times of India etc.) kabhi mat bolo.
+4. Response clean, helpful aur engaging hona chahiye.`;
 
     const formattedHistory = Array.isArray(history)
       ? history
-          .slice(-6)
+          .slice(-8)
           .filter((h: any) => h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string")
           .map((h: any) => ({ role: h.role, content: h.content }))
       : [];
 
     const userMessageContent = searchContext
-      ? `Live Search Information:\n${searchContext}\n\nCurrent Question: ${cleanMsg}`
+      ? `[Live Web Data]:\n${searchContext}\n\n[User Question]: ${cleanMsg}`
       : cleanMsg;
 
-    // 4. Primary: Groq API Execution
+    // 4. GROQ API LLM CALL (Full conversational generation)
     if (groqKey) {
       try {
         const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -92,8 +88,8 @@ STRICT RULES:
               ...formattedHistory,
               { role: "user", content: userMessageContent }
             ],
-            max_tokens: 350,
-            temperature: 0.2
+            max_tokens: 450,
+            temperature: 0.6 // Natural human-like tone
           })
         });
 
@@ -103,26 +99,26 @@ STRICT RULES:
           return NextResponse.json({ reply });
         }
       } catch (e) {
-        console.error("Groq execution error:", e);
+        console.error("Groq generation failed:", e);
       }
     }
 
-    // 5. Cleaned Fallback (Stripping source domains/publishers)
-    if (searchContext) {
-      const cleanText = searchContext
-        .replace(/https?:\/\/\S+/g, '')
-        .replace(/(hindustantimes|ndtv|indiatoday|times of india|the hindu|indian express)/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      const sentences = cleanText.split(/(?<=[.?!])\s+/);
-      const safeSummary = sentences.slice(0, 2).join(' ');
-      return NextResponse.json({ reply: `Namaste! Taaza jaankari ke anusaar: ${safeSummary}` });
+    // 5. NATURAL CASUAL FALLBACK (Agar API down ho)
+    if (isCasualChat) {
+      return NextResponse.json({
+        reply: "Sab ekdum badhiya bhai! Aap batao, aaj kya plan hai ya kya naya sikhna/poochna chahte ho?"
+      });
     }
 
-    return NextResponse.json({ reply: "Namaste! Kripya thodi der baad dobara poochiye." });
+    if (searchContext) {
+      const clean = searchContext.replace(/https?:\/\/\S+/g, '').replace(/[@#]\S+/g, '').slice(0, 200);
+      return NextResponse.json({ reply: `Namaste! Taaza jaankari: ${clean}` });
+    }
+
+    return NextResponse.json({ reply: "Main bilkul badhiya hoon! Aap bataiye main aapki kya madad kar sakta hoon?" });
 
   } catch (err) {
-    console.error("Chat route crash:", err);
-    return NextResponse.json({ reply: "Namaste! Server me takneeki samasya aayi hai." });
+    console.error("Chat route fatal error:", err);
+    return NextResponse.json({ reply: "Main samajh nahi paaya, kripya dobara likhein!" });
   }
 }

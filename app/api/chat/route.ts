@@ -23,92 +23,95 @@ export async function POST(req: Request) {
       .trim() || cleanMsg;
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📸 1. EXACT REAL PHOTO SEARCH
+    // 📸 IMAGE GENERATION & SCRAPING ENGINE (Base64 Guaranteed)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (isImageMode) {
-      let realImageUrl = "";
+      let finalBase64 = "";
 
-      // Step A: Priority 1 - Exact Tavily Web Image Search
-      if (tavilyKey) {
+      // 1. Wikipedia Direct Real Photo Fetch
+      try {
+        const wikiRes = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&origin=*&format=json&generator=search&gsrnamespace=0&gsrlimit=1&gsrsearch=${encodeURIComponent(cleanEntity)}&prop=pageimages&pithumbsize=1000`
+        );
+        const wikiData = await wikiRes.json();
+        const pages = wikiData?.query?.pages;
+        if (pages) {
+          const firstKey = Object.keys(pages)[0];
+          const imgUrl = pages[firstKey]?.thumbnail?.source;
+          if (imgUrl) {
+            const imgRes = await fetch(imgUrl);
+            if (imgRes.ok) {
+              const buffer = await imgRes.arrayBuffer();
+              finalBase64 = `data:image/jpeg;base64,${Buffer.from(buffer).toString("base64")}`;
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Wiki fetch error:", e);
+      }
+
+      // 2. Tavily Web Images to Base64
+      if (!finalBase64 && tavilyKey) {
         try {
           const tvRes = await fetch("https://api.tavily.com/search", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               api_key: tavilyKey,
-              query: `"${cleanEntity}" campus building photo official`,
-              search_depth: "advanced",
+              query: `${cleanEntity} building campus branch photo`,
+              search_depth: "basic",
               include_images: true,
-              max_results: 5
+              max_results: 3
             }),
           });
           const tvData = await tvRes.json();
-          if (tvData.images && tvData.images.length > 0) {
-            // Find an image that doesn't belong to random irrelevant scrapers
-            const valid = tvData.images.find((u: string) => 
-              typeof u === "string" && 
-              u.startsWith("http") && 
-              !u.includes("logo") && 
-              !u.includes("icon") && 
-              !u.includes("avatar")
-            );
-            if (valid) realImageUrl = valid;
-          }
-        } catch (e) {
-          console.error("Tavily advanced photo fetch failed:", e);
-        }
-      }
-
-      // Step B: Direct Exact Title Wikipedia Search (Only if exact match)
-      if (!realImageUrl) {
-        try {
-          const wikiRes = await fetch(
-            `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(cleanEntity)}&prop=pageimages&format=json&pithumbsize=1200&origin=*`
-          );
-          const wikiData = await wikiRes.json();
-          const pages = wikiData?.query?.pages;
-          if (pages) {
-            const pageId = Object.keys(pages)[0];
-            if (pageId !== "-1" && pages[pageId]?.thumbnail?.source) {
-              realImageUrl = pages[pageId].thumbnail.source;
+          if (tvData.images?.length > 0) {
+            for (const imgUrl of tvData.images) {
+              try {
+                const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(6000) });
+                if (imgRes.ok) {
+                  const buffer = await imgRes.arrayBuffer();
+                  finalBase64 = `data:image/jpeg;base64,${Buffer.from(buffer).toString("base64")}`;
+                  break;
+                }
+              } catch {
+                continue;
+              }
             }
           }
         } catch (e) {
-          console.error("Wiki photo error:", e);
+          console.error("Tavily search error:", e);
         }
       }
 
-      if (realImageUrl) {
+      // 3. Ultra-HD Flux Realism Generation (If real photo not found or pure generation)
+      if (!finalBase64) {
+        try {
+          const seed = Math.floor(Math.random() * 999999);
+          const promptUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanEntity + ", realistic, building, exterior, high detail, 4k photograph")}?width=800&height=600&seed=${seed}&nologo=true&model=flux-realism`;
+          
+          const imgRes = await fetch(promptUrl, { signal: AbortSignal.timeout(20000) });
+          if (imgRes.ok) {
+            const buffer = await imgRes.arrayBuffer();
+            finalBase64 = `data:image/jpeg;base64,${Buffer.from(buffer).toString("base64")}`;
+          }
+        } catch (e) {
+          console.error("Pollinations error:", e);
+        }
+      }
+
+      if (finalBase64) {
         return NextResponse.json({
-          reply: `✅ Yeh rahi **${cleanEntity}** ki real photograph!`,
-          generatedImage: realImageUrl
+          reply: `✅ Yeh rahi **${cleanEntity}** ki image!`,
+          generatedImage: finalBase64
         });
       }
 
-      // Step C: Fallback AI Realism Generation
-      try {
-        const seed = Math.floor(Math.random() * 999999);
-        const promptParam = encodeURIComponent(`Authentic real-life photograph of ${cleanEntity}, actual architecture, daytime daylight, 8k resolution`);
-        const fallbackUrl = `https://image.pollinations.ai/prompt/${promptParam}?width=1024&height=768&seed=${seed}&nologo=true&model=flux-realism`;
-
-        const imgRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(20000) });
-        if (imgRes.ok) {
-          const buffer = await imgRes.arrayBuffer();
-          const base64 = Buffer.from(buffer).toString("base64");
-          return NextResponse.json({
-            reply: `✅ Yeh rahi **${cleanEntity}** ki image!`,
-            generatedImage: `data:image/jpeg;base64,${base64}`
-          });
-        }
-      } catch (e) {
-        console.error("Fallback generation failed:", e);
-      }
-
-      return NextResponse.json({ reply: "Image fetch karne me samasya aayi, kripya dobara try karein!" });
+      return NextResponse.json({ reply: "Image load nahi ho saki, kripya dobara try karein!" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 💬 2. CHAT HANDLER
+    // 💬 CHAT HANDLER
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
@@ -136,7 +139,7 @@ export async function POST(req: Request) {
           searchContext += tvData.results.map((r: any) => r.content || "").join(" ");
         }
       } catch (err) {
-        console.error("Tavily error:", err);
+        console.error("Tavily text error:", err);
       }
     }
 
@@ -180,7 +183,7 @@ User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence comple
           return NextResponse.json({ reply });
         }
       } catch (e) {
-        console.error("Groq error:", e);
+        console.error("Groq execution failed:", e);
       }
     }
 
@@ -192,7 +195,7 @@ User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence comple
     return NextResponse.json({ reply: "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye." });
 
   } catch (err) {
-    console.error("Fatal chat error:", err);
+    console.error("Chat fatal error:", err);
     return NextResponse.json({ reply: "Namaste! Server issue aaya hai, kripya refresh karein." });
   }
 }

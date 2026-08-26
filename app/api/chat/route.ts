@@ -6,7 +6,6 @@ export async function POST(req: Request) {
 
     const groqKey = process.env.GROQ_API_KEY?.trim() || process.env.NEXT_PUBLIC_GROQ_API_KEY?.trim();
     const tavilyKey = process.env.NEXT_PUBLIC_TAVILY_API_KEY?.trim() || process.env.TAVILY_API_KEY?.trim();
-    const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim() || process.env.SERPER_API_KEY?.trim();
 
     const now = new Date();
     const aajKiDate = now.toLocaleDateString('en-IN', {
@@ -21,49 +20,76 @@ export async function POST(req: Request) {
     const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📸 1. REAL PHOTO FETCH (For real places, universities, celebrities)
+    // 📸 1. REAL PHOTO FETCH ENGINE (Real Places, Colleges, People, Products)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const isRealPhotoRequest = /(ka photo|ki photo|ka image|ki image|dikhao|real image|real photo)/i.test(cleanMsg) && mode !== "imagine";
-    
-    if (isRealPhotoRequest && (serperKey || tavilyKey)) {
-      const searchQuery = cleanMsg
-        .replace(/(ka photo|ki photo|ka image|ki image|dikhao|photo|image|real)/gi, "")
-        .trim();
+    const isImageQuery = mode === "imagine" || /(image|photo|pic|tasveer|picture)/i.test(cleanMsg);
+    const cleanEntityName = cleanMsg
+      .replace(/(image banao|photo banao|generate image|draw|create image|ka image|ki image|ka photo|ki photo|photo|image|pic|tasveer|dikhao|bhejo)/gi, "")
+      .trim();
 
-      // Attempt Serper Images API
-      if (serperKey) {
+    // Check if prompt is a real world entity vs pure imagination
+    const isImaginative = /(flying|cyberpunk|anime|superhero|space robot|dragon|alien|illustration|painting|3d render|cartoon)/i.test(cleanMsg);
+
+    if (isImageQuery && !isImaginative && cleanEntityName.length > 2) {
+      let realImageUrl = "";
+
+      // Step A: Fetch via Tavily with Image search enabled
+      if (tavilyKey) {
         try {
-          const imgRes = await fetch("https://google.serper.dev/images", {
+          const tvRes = await fetch("https://api.tavily.com/search", {
             method: "POST",
-            headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
-            body: JSON.stringify({ q: `${searchQuery} official campus building`, gl: "in", hl: "hi", num: 1 }),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              api_key: tavilyKey,
+              query: `${cleanEntityName} official photo campus building`,
+              search_depth: "basic",
+              include_images: true,
+              max_results: 3
+            }),
           });
-          const imgData = await imgRes.json();
-          if (imgData.images?.[0]?.imageUrl) {
-            return NextResponse.json({
-              reply: `✅ Yeh rahi ${searchQuery} ki real photo!`,
-              generatedImage: imgData.images[0].imageUrl
-            });
+          const tvData = await tvRes.json();
+          if (tvData.images && tvData.images.length > 0) {
+            realImageUrl = tvData.images[0];
           }
         } catch (e) {
-          console.error("Serper image fetch failed:", e);
+          console.error("Tavily image error:", e);
         }
+      }
+
+      // Step B: Fetch via Wikipedia / Wikimedia API (Direct Real Photo Backup)
+      if (!realImageUrl) {
+        try {
+          const wikiRes = await fetch(
+            `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(cleanEntityName)}&prop=pageimages&format=json&pithumbsize=1000&origin=*`
+          );
+          const wikiData = await wikiRes.json();
+          const pages = wikiData.query?.pages;
+          if (pages) {
+            const pageId = Object.keys(pages)[0];
+            if (pageId !== "-1" && pages[pageId]?.thumbnail?.source) {
+              realImageUrl = pages[pageId].thumbnail.source;
+            }
+          }
+        } catch (e) {
+          console.error("Wiki photo error:", e);
+        }
+      }
+
+      if (realImageUrl) {
+        return NextResponse.json({
+          reply: `✅ Yeh rahi **${cleanEntityName}** ki real photograph!`,
+          generatedImage: realImageUrl
+        });
       }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🎨 2. AI CREATIVE GENERATION (For imaginative prompts)
+    // 🎨 2. AI CREATIVE GENERATION (For pure art & fictional concepts)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const isCreativeImage = mode === "imagine" || /^(image banao|photo banao|generate image|draw|create image)/i.test(cleanMsg);
-
-    if (isCreativeImage) {
+    if (isImageQuery) {
       try {
-        const cleanPrompt = cleanMsg
-          .replace(/(image banao|photo banao|generate image|draw|create image|ka image|ki photo)/gi, "")
-          .trim() || cleanMsg;
-
         const seed = Math.floor(Math.random() * 999999);
-        const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt + ", high quality, 4k, photorealistic")}?width=768&height=768&seed=${seed}&nologo=true&model=flux`;
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent((cleanEntityName || cleanMsg) + ", photorealistic, 4k, hyper-detailed real life photograph")}?width=800&height=600&seed=${seed}&nologo=true&model=flux`;
 
         const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(20000) });
         if (imgRes.ok) {
@@ -75,27 +101,24 @@ export async function POST(req: Request) {
           });
         }
       } catch (e) {
-        console.error("Pollinations image generation error:", e);
+        console.error("Pollinations generation error:", e);
       }
-      return NextResponse.json({ reply: "Image generate karne me samasya aayi, kripya dobara try karein!" });
+      return NextResponse.json({ reply: "Image load nahi ho payi, kripya dobara try karein!" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 💬 3. GREETINGS & CASUAL INTENTS
+    // 💬 3. CONVERSATIONAL CHAT & LIVE INFO
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
     if (isGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
       return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis baare mein baat karna chahte hain?" });
     }
 
-    const isChitChat = /^(kaise ho|kya haal|kya haal hai|kya hal|sab badhiya|aur batao|kya chal raha hai|kya haal chal|sup|yo|wassup|kaise ho bhai)$/i.test(lowerMsg);
+    const isChitChat = /^(kaise ho|kya haal|kya haal hai|kya hal|sab badhiya|aur batao|kya chal raha hai|sup|yo|wassup|kaise ho bhai)$/i.test(lowerMsg);
     if (isChitChat && !imageBase64 && !fileBase64) {
-      return NextResponse.json({ reply: "Main ekdum badhiya hoon bhai! Aap batao, aaj kya janna ya poochna chahte ho?" });
+      return NextResponse.json({ reply: "Main ekdum badhiya hoon bhai! Aap batao, aaj kya help chahiye?" });
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🔍 4. LIVE SEARCH & INTEL
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
     if (cleanMsg.length > 2 && tavilyKey) {
       try {
@@ -121,9 +144,9 @@ export async function POST(req: Request) {
     }
 
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Aap ek intelligent, natural aur conversational AI assistant ho (jaise ChatGPT/Gemini).
-- User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence complete karke jawab do.
-- Namaste! se shuru karo.`;
+Aap ek intelligent, natural aur helpful AI assistant ho (jaise ChatGPT/Gemini).
+User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence complete karke jawab do.
+Namaste! se shuru karo.`;
 
     const formattedHistory = Array.isArray(history)
       ? history
@@ -136,9 +159,6 @@ Aap ek intelligent, natural aur conversational AI assistant ho (jaise ChatGPT/Ge
       ? `Live Search Information:\n${searchContext}\n\nUser Question: ${cleanMsg}`
       : cleanMsg;
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🤖 5. GROQ LLM INFERENCE
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (groqKey) {
       try {
         const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -169,22 +189,15 @@ Aap ek intelligent, natural aur conversational AI assistant ho (jaise ChatGPT/Ge
       }
     }
 
-    // Fallback
     if (searchContext) {
-      const cleanText = searchContext
-        .replace(/https?:\/\/\S+/g, '')
-        .replace(/[@#]\S+/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      const sentences = cleanText.split(/(?<=[.?!])\s+/);
-      const completeSentences = sentences.slice(0, 2).join(' ');
-      return NextResponse.json({ reply: `Namaste! Jaankari ke anusaar: ${completeSentences}` });
+      const cleanText = searchContext.replace(/https?:\/\/\S+/g, '').replace(/[@#]\S+/g, '').slice(0, 250);
+      return NextResponse.json({ reply: `Namaste! Jaankari ke anusaar: ${cleanText}` });
     }
 
     return NextResponse.json({ reply: "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye." });
 
   } catch (err) {
-    console.error("Chat fatal error:", err);
-    return NextResponse.json({ reply: "Namaste! Server issue aaya hai, kripya refresh karein." });
+    console.error("Chat route fatal:", err);
+    return NextResponse.json({ reply: "Namaste! Server me takneeki samasya aayi hai." });
   }
 }

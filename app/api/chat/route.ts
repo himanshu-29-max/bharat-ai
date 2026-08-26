@@ -17,106 +17,96 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Namaste! Kuch poochiye." });
     }
 
-    const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📸 1. REAL PHOTO FETCH ENGINE (Real Places, Colleges, People, Products)
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const isImageQuery = mode === "imagine" || /(image|photo|pic|tasveer|picture)/i.test(cleanMsg);
-    const cleanEntityName = cleanMsg
+    const isImageMode = mode === "imagine" || /(image|photo|pic|tasveer)/i.test(cleanMsg);
+    const cleanEntity = cleanMsg
       .replace(/(image banao|photo banao|generate image|draw|create image|ka image|ki image|ka photo|ki photo|photo|image|pic|tasveer|dikhao|bhejo)/gi, "")
-      .trim();
+      .trim() || cleanMsg;
 
-    // Check if prompt is a real world entity vs pure imagination
-    const isImaginative = /(flying|cyberpunk|anime|superhero|space robot|dragon|alien|illustration|painting|3d render|cartoon)/i.test(cleanMsg);
-
-    if (isImageQuery && !isImaginative && cleanEntityName.length > 2) {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 📸 1. REAL PHOTO ENGINE (Direct Web Search & Wikipedia Thumbnail)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if (isImageMode) {
       let realImageUrl = "";
 
-      // Step A: Fetch via Tavily with Image search enabled
-      if (tavilyKey) {
+      // Step A: Wikipedia Live Page Image Search (Sabse Accurate Real Photos)
+      try {
+        const wikiSearchRes = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&origin=*&format=json&generator=search&gsrnamespace=0&gsrlimit=1&gsrsearch=${encodeURIComponent(cleanEntity)}&prop=pageimages&pithumbsize=1200`
+        );
+        const wikiData = await wikiSearchRes.json();
+        const pages = wikiData?.query?.pages;
+        if (pages) {
+          const firstPageKey = Object.keys(pages)[0];
+          if (pages[firstPageKey]?.thumbnail?.source) {
+            realImageUrl = pages[firstPageKey].thumbnail.source;
+          }
+        }
+      } catch (e) {
+        console.error("Wikipedia image scrape failed:", e);
+      }
+
+      // Step B: Tavily Live Images Search
+      if (!realImageUrl && tavilyKey) {
         try {
           const tvRes = await fetch("https://api.tavily.com/search", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               api_key: tavilyKey,
-              query: `${cleanEntityName} official photo campus building`,
+              query: `${cleanEntity} campus building official photo`,
               search_depth: "basic",
               include_images: true,
-              max_results: 3
+              max_results: 5
             }),
           });
           const tvData = await tvRes.json();
           if (tvData.images && tvData.images.length > 0) {
-            realImageUrl = tvData.images[0];
+            // Filter valid image URLs
+            const validImg = tvData.images.find((img: string) => img.startsWith("http") && !img.includes("favicon"));
+            if (validImg) realImageUrl = validImg;
           }
         } catch (e) {
           console.error("Tavily image error:", e);
         }
       }
 
-      // Step B: Fetch via Wikipedia / Wikimedia API (Direct Real Photo Backup)
-      if (!realImageUrl) {
-        try {
-          const wikiRes = await fetch(
-            `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(cleanEntityName)}&prop=pageimages&format=json&pithumbsize=1000&origin=*`
-          );
-          const wikiData = await wikiRes.json();
-          const pages = wikiData.query?.pages;
-          if (pages) {
-            const pageId = Object.keys(pages)[0];
-            if (pageId !== "-1" && pages[pageId]?.thumbnail?.source) {
-              realImageUrl = pages[pageId].thumbnail.source;
-            }
-          }
-        } catch (e) {
-          console.error("Wiki photo error:", e);
-        }
-      }
-
+      // Agar Real Photo mil gayi toh direct actual picture return karein
       if (realImageUrl) {
         return NextResponse.json({
-          reply: `✅ Yeh rahi **${cleanEntityName}** ki real photograph!`,
+          reply: `✅ Yeh rahi **${cleanEntity}** ki real photograph!`,
           generatedImage: realImageUrl
         });
       }
-    }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🎨 2. AI CREATIVE GENERATION (For pure art & fictional concepts)
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if (isImageQuery) {
+      // Step C: Creative Fallback with Photorealistic Prompting (Only if real photo is not found on web)
       try {
         const seed = Math.floor(Math.random() * 999999);
-        const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent((cleanEntityName || cleanMsg) + ", photorealistic, 4k, hyper-detailed real life photograph")}?width=800&height=600&seed=${seed}&nologo=true&model=flux`;
+        const promptParam = encodeURIComponent(`Authentic real-life documentary photograph of ${cleanEntity}, 8k resolution, shot on DSLR, natural lighting, actual campus architecture, highly realistic`);
+        const fallbackUrl = `https://image.pollinations.ai/prompt/${promptParam}?width=1024&height=768&seed=${seed}&nologo=true&model=flux-realism`;
 
-        const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(20000) });
+        const imgRes = await fetch(fallbackUrl, { signal: AbortSignal.timeout(20000) });
         if (imgRes.ok) {
           const buffer = await imgRes.arrayBuffer();
           const base64 = Buffer.from(buffer).toString("base64");
           return NextResponse.json({
-            reply: `✅ Yeh rahi aapki image!`,
+            reply: `✅ Yeh rahi **${cleanEntity}** ki image!`,
             generatedImage: `data:image/jpeg;base64,${base64}`
           });
         }
       } catch (e) {
-        console.error("Pollinations generation error:", e);
+        console.error("Image generation failed:", e);
       }
-      return NextResponse.json({ reply: "Image load nahi ho payi, kripya dobara try karein!" });
+
+      return NextResponse.json({ reply: "Image fetch karne me samasya aayi, kripya dobara try karein!" });
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 💬 3. CONVERSATIONAL CHAT & LIVE INFO
+    // 💬 2. CHAT & CONVERSATION ENGINE
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
-    if (isGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
+    if (isGreeting && (!history || history.length === 0)) {
       return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis baare mein baat karna chahte hain?" });
-    }
-
-    const isChitChat = /^(kaise ho|kya haal|kya haal hai|kya hal|sab badhiya|aur batao|kya chal raha hai|sup|yo|wassup|kaise ho bhai)$/i.test(lowerMsg);
-    if (isChitChat && !imageBase64 && !fileBase64) {
-      return NextResponse.json({ reply: "Main ekdum badhiya hoon bhai! Aap batao, aaj kya help chahiye?" });
     }
 
     let searchContext = "";
@@ -139,14 +129,12 @@ export async function POST(req: Request) {
           searchContext += tvData.results.map((r: any) => r.content || "").join(" ");
         }
       } catch (err) {
-        console.error("Tavily error:", err);
+        console.error("Tavily text error:", err);
       }
     }
 
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Aap ek intelligent, natural aur helpful AI assistant ho (jaise ChatGPT/Gemini).
-User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence complete karke jawab do.
-Namaste! se shuru karo.`;
+User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence complete karke jawab do. Namaste! se shuru karo.`;
 
     const formattedHistory = Array.isArray(history)
       ? history
@@ -197,7 +185,7 @@ Namaste! se shuru karo.`;
     return NextResponse.json({ reply: "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye." });
 
   } catch (err) {
-    console.error("Chat route fatal:", err);
-    return NextResponse.json({ reply: "Namaste! Server me takneeki samasya aayi hai." });
+    console.error("Chat fatal error:", err);
+    return NextResponse.json({ reply: "Namaste! Server issue aaya hai, kripya refresh karein." });
   }
 }

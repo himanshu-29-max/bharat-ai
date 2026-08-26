@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { message, imageBase64, fileBase64, history = [] } = await req.json();
+    const { message, imageBase64, fileBase64, history = [], mode } = await req.json();
 
     const groqKey = process.env.GROQ_API_KEY?.trim() || process.env.NEXT_PUBLIC_GROQ_API_KEY?.trim();
     const tavilyKey = process.env.NEXT_PUBLIC_TAVILY_API_KEY?.trim() || process.env.TAVILY_API_KEY?.trim();
@@ -17,9 +17,38 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Namaste! Kuch poochiye." });
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🎨 1. IMAGE GENERATION (Mode: Imagine / Image Banao)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const isImageIntent = mode === "imagine" || /^(image banao|photo banao|generate image|draw|create image)/i.test(cleanMsg) || cleanMsg.toLowerCase().endsWith("ka image") || cleanMsg.toLowerCase().endsWith("ki photo");
+
+    if (isImageIntent) {
+      try {
+        const cleanPrompt = cleanMsg
+          .replace(/(image banao|photo banao|generate image|draw|create image|ka image|ki photo|image|photo)/gi, "")
+          .trim() || cleanMsg;
+
+        const seed = Math.floor(Math.random() * 999999);
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt + ", high quality, 4k, photorealistic")}?width=768&height=768&seed=${seed}&nologo=true&model=flux`;
+
+        const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(20000) });
+        if (imgRes.ok) {
+          const buffer = await imgRes.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
+          return NextResponse.json({
+            reply: `✅ Yeh rahi ${cleanPrompt} ki image!`,
+            generatedImage: `data:image/jpeg;base64,${base64}`
+          });
+        }
+      } catch (e) {
+        console.error("Pollinations image generation error:", e);
+      }
+      return NextResponse.json({ reply: "Image generate karne me samasya aayi, kripya dobara try karein!" });
+    }
+
     const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
 
-    // 1. GREETINGS & CASUAL INTENTS
+    // 2. GREETINGS & CASUAL INTENTS
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
     if (isGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
       return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis baare mein baat karna chahte hain?" });
@@ -30,18 +59,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Main ekdum badhiya hoon bhai! Aap batao, aaj kya janna ya poochna chahte ho?" });
     }
 
-    // 2. LIVE WEB SEARCH VIA TAVILY
-    const needsSearch = cleanMsg.length > 2 && /(today|aaj|latest|current|cm|dm|pm|nifty|sensex|score|match|weather|khabar|election|who is|kon h|kaha h|price|minister|governor)/i.test(cleanMsg);
-
+    // 3. LIVE WEB SEARCH (Har information & factual query ke liye)
     let searchContext = "";
-    if (needsSearch && tavilyKey) {
+    if (cleanMsg.length > 2 && tavilyKey) {
       try {
         const tvRes = await fetch("https://api.tavily.com/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_key: tavilyKey,
-            query: `${cleanMsg} India official update`,
+            query: `${cleanMsg} India official details`,
             search_depth: "basic",
             max_results: 3,
             include_answer: true
@@ -57,12 +84,11 @@ export async function POST(req: Request) {
       }
     }
 
-    // 3. SYSTEM PROMPT (ChatGPT / Gemini Style Natural Tone)
+    // 4. PERSONA PROMPT
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Aap ek intelligent, natural aur helpful AI assistant ho.
+Aap ek intelligent, natural aur helpful AI assistant ho (jaise ChatGPT/Gemini).
 - User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence complete karke jawab do.
-- Kisi bhi word ya sentence ko adha mat chhoro.
-- Jo sawaal pucha gaya hai sirf uska direct jawab do.
+- University/Colleges/Places ke baare mein clearly batao (location, courses, details).
 - Namaste! se shuru karo.`;
 
     const formattedHistory = Array.isArray(history)
@@ -76,7 +102,7 @@ Aap ek intelligent, natural aur helpful AI assistant ho.
       ? `Live Search Information:\n${searchContext}\n\nUser Question: ${cleanMsg}`
       : cleanMsg;
 
-    // 4. GROQ API CALL
+    // 5. GROQ LLM EXECUTION
     if (groqKey) {
       try {
         const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -107,7 +133,7 @@ Aap ek intelligent, natural aur helpful AI assistant ho.
       }
     }
 
-    // 5. NO TRUNCATION CLEAN FALLBACK
+    // 6. SENTENCE-SAFE FALLBACK
     if (searchContext) {
       const cleanText = searchContext
         .replace(/https?:\/\/\S+/g, '')
@@ -116,7 +142,7 @@ Aap ek intelligent, natural aur helpful AI assistant ho.
         .trim();
       const sentences = cleanText.split(/(?<=[.?!])\s+/);
       const completeSentences = sentences.slice(0, 2).join(' ');
-      return NextResponse.json({ reply: `Namaste! Taza jaankari: ${completeSentences}` });
+      return NextResponse.json({ reply: `Namaste! Jaankari ke anusaar: ${completeSentences}` });
     }
 
     return NextResponse.json({ reply: "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye." });

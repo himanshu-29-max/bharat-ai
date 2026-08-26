@@ -19,17 +19,19 @@ export async function POST(req: Request) {
 
     const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
 
-    // 1. SIMPLE GREETINGS (Hi / Hello / Namaste)
-    const isJustGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
-    if (isJustGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
+    // 1. GREETINGS & CASUAL INTENTS
+    const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
+    if (isGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
       return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis baare mein baat karna chahte hain?" });
     }
 
-    // 2. CASUAL CHIT-CHAT (Kaise ho / kya haal chal)
-    const isChitChat = /^(kaise ho|kya haal|kya haal hai|kya hal|sab badhiya|aur batao|kya chal raha hai|kya haal chal|kya haal samachar|haal chaal|haal samachar|sup|yo|wassup)$/i.test(lowerMsg);
+    const isChitChat = /^(kaise ho|kya haal|kya haal hai|kya hal|sab badhiya|aur batao|kya chal raha hai|kya haal chal|sup|yo|wassup|kaise ho bhai)$/i.test(lowerMsg);
+    if (isChitChat && !imageBase64 && !fileBase64) {
+      return NextResponse.json({ reply: "Main ekdum badhiya hoon bhai! Aap batao, aaj kya janna ya poochna chahte ho?" });
+    }
 
-    // 3. SEARCH INTENT DETECTION (Sirf tabhi search karega jab specific live facts puche jayein)
-    const needsSearch = !isJustGreeting && !isChitChat && cleanMsg.length > 3 && /(today|aaj|latest|current|cm|dm|pm|nifty|sensex|score|match|weather|taaza|khabar|election|who is|kon h|kaha h|price)/i.test(cleanMsg);
+    // 2. LIVE WEB SEARCH VIA TAVILY
+    const needsSearch = cleanMsg.length > 2 && /(today|aaj|latest|current|cm|dm|pm|nifty|sensex|score|match|weather|khabar|election|who is|kon h|kaha h|price|minister|governor)/i.test(cleanMsg);
 
     let searchContext = "";
     if (needsSearch && tavilyKey) {
@@ -39,7 +41,7 @@ export async function POST(req: Request) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_key: tavilyKey,
-            query: `${cleanMsg} India update`,
+            query: `${cleanMsg} India official update`,
             search_depth: "basic",
             max_results: 3,
             include_answer: true
@@ -55,13 +57,13 @@ export async function POST(req: Request) {
       }
     }
 
-    // 4. PERSONA & PROMPT
+    // 3. SYSTEM PROMPT (ChatGPT / Gemini Style Natural Tone)
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Aap ChatGPT/Gemini jaisa dynamic aur intelligent conversational assistant ho.
-- Simple greetings ka normal polite greeting do.
-- "Kya haal hai / kaise ho" ka warm aur friendly reply do ("Main badhiya hoon, aap batao...").
-- Factual queries ka clear aur direct Hinglish me jawab do.
-- Media links, credits ya raw snippets mention mat karo.`;
+Aap ek intelligent, natural aur helpful AI assistant ho.
+- User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence complete karke jawab do.
+- Kisi bhi word ya sentence ko adha mat chhoro.
+- Jo sawaal pucha gaya hai sirf uska direct jawab do.
+- Namaste! se shuru karo.`;
 
     const formattedHistory = Array.isArray(history)
       ? history
@@ -71,10 +73,10 @@ Aap ChatGPT/Gemini jaisa dynamic aur intelligent conversational assistant ho.
       : [];
 
     const userMessageContent = searchContext
-      ? `Search Data:\n${searchContext}\n\nUser Question: ${cleanMsg}`
+      ? `Live Search Information:\n${searchContext}\n\nUser Question: ${cleanMsg}`
       : cleanMsg;
 
-    // 5. GROQ LLM CALL
+    // 4. GROQ API CALL
     if (groqKey) {
       try {
         const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -90,8 +92,8 @@ Aap ChatGPT/Gemini jaisa dynamic aur intelligent conversational assistant ho.
               ...formattedHistory,
               { role: "user", content: userMessageContent }
             ],
-            max_tokens: 400,
-            temperature: 0.5
+            max_tokens: 500,
+            temperature: 0.3
           })
         });
 
@@ -101,26 +103,26 @@ Aap ChatGPT/Gemini jaisa dynamic aur intelligent conversational assistant ho.
           return NextResponse.json({ reply });
         }
       } catch (e) {
-        console.error("Groq error:", e);
+        console.error("Groq execution failed:", e);
       }
     }
 
-    // 6. SAFE ACCURATE FALLBACKS
-    if (isJustGreeting) {
-      return NextResponse.json({ reply: "Namaste! Main aapki kya madad kar sakta hoon?" });
-    }
-    if (isChitChat) {
-      return NextResponse.json({ reply: "Main badhiya hoon! Aap batao, aaj kya help chahiye?" });
-    }
+    // 5. NO TRUNCATION CLEAN FALLBACK
     if (searchContext) {
-      const clean = searchContext.replace(/https?:\/\/\S+/g, '').replace(/[@#]\S+/g, '').slice(0, 180);
-      return NextResponse.json({ reply: `Namaste! Taza jaankari: ${clean}...` });
+      const cleanText = searchContext
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/[@#]\S+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const sentences = cleanText.split(/(?<=[.?!])\s+/);
+      const completeSentences = sentences.slice(0, 2).join(' ');
+      return NextResponse.json({ reply: `Namaste! Taza jaankari: ${completeSentences}` });
     }
 
-    return NextResponse.json({ reply: "Namaste! Main aapki kya madad kar sakta hoon?" });
+    return NextResponse.json({ reply: "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye." });
 
   } catch (err) {
-    console.error("Chat error:", err);
+    console.error("Chat route fatal:", err);
     return NextResponse.json({ reply: "Namaste! Server me takneeki samasya aayi hai." });
   }
 }

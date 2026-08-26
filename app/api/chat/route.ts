@@ -4,10 +4,8 @@ export async function POST(req: Request) {
   try {
     const { message, imageBase64, fileBase64, history = [] } = await req.json();
 
-    // Aapke Vercel ke exact variable names support karne ke liye:
-    const groqKey = process.env.NEXT_PUBLIC_GROQ_API_KEY?.trim() || process.env.GROQ_API_KEY?.trim();
+    const groqKey = process.env.GROQ_API_KEY?.trim() || process.env.NEXT_PUBLIC_GROQ_API_KEY?.trim();
     const tavilyKey = process.env.NEXT_PUBLIC_TAVILY_API_KEY?.trim() || process.env.TAVILY_API_KEY?.trim();
-    const newsKey = process.env.NEWS_API_KEY?.trim();
 
     const now = new Date();
     const aajKiDate = now.toLocaleDateString('en-IN', {
@@ -19,13 +17,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Namaste! Kuch poochiye." });
     }
 
-    // 1. Direct Greeting
+    // 1. Direct Greetings
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(cleanMsg.toLowerCase());
     if (isGreeting && !imageBase64 && !fileBase64) {
       return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis baare mein jaankari chahiye?" });
     }
 
-    // 2. Live Web Search (Tavily Search API)
+    // 2. Real-time Search via Tavily
     let searchContext = "";
     if (tavilyKey && cleanMsg.length > 2) {
       try {
@@ -34,9 +32,9 @@ export async function POST(req: Request) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_key: tavilyKey,
-            query: `${cleanMsg} India latest`,
+            query: `${cleanMsg} 2026 India update`,
             search_depth: "basic",
-            max_results: 3,
+            max_results: 4,
             include_answer: true
           }),
         });
@@ -46,76 +44,54 @@ export async function POST(req: Request) {
           searchContext += tvData.results.map((r: any) => r.content?.slice(0, 200)).join("\n");
         }
       } catch (err) {
-        console.error("Tavily search failed:", err);
-      }
-    }
-
-    // 3. News Fallback
-    if (!searchContext && newsKey && /(news|khabar|taza|samachar)/i.test(cleanMsg)) {
-      try {
-        const nr = await fetch(`https://newsapi.org/v2/top-headlines?country=in&pageSize=3&apiKey=${newsKey}&q=${encodeURIComponent(cleanMsg)}`);
-        const nd = await nr.json();
-        if (nd.articles?.length > 0) {
-          searchContext += nd.articles.map((a: any) => a.title).join("\n");
-        }
-      } catch (e) {
-        console.error("News API failed:", e);
+        console.error("Tavily error:", err);
       }
     }
 
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-User ke sawaal ka accurate, informative aur seedha Hinglish mein jawab do (2-3 lines).
-Har jawab Namaste! se shuru karo.`;
+User ke sawaal ka bilkul fresh, accurate aur human-like Hinglish mein direct jawab do (2-3 sentences max).
+Live search context ko prioritize karo. Static purane data ko avoid karo.
+Namaste! se shuru karo.`;
 
-    const userPrompt = searchContext
-      ? `${systemPrompt}\n\nLive Search Data:\n${searchContext}\n\nQuestion: ${cleanMsg}`
-      : `${systemPrompt}\n\nQuestion: ${cleanMsg}`;
-
-    let reply = "";
-
-    // 4. Groq Llama 3.1 Call
+    // 3. Groq API Execution
     if (groqKey) {
-      try {
-        const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${groqKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: "llama-3.1-8b-instant",
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: searchContext ? `Search Info:\n${searchContext}\n\nQuestion: ${cleanMsg}` : cleanMsg }
-            ],
-            max_tokens: 500,
-            temperature: 0.2
-          })
-        });
-        const gData = await groqRes.json();
-        reply = gData.choices?.[0]?.message?.content?.trim() || "";
-      } catch (e) {
-        console.error("Groq execution failed:", e);
-      }
-    }
+      const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${groqKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: searchContext ? `Live Search Data:\n${searchContext}\n\nUser Question: ${cleanMsg}` : cleanMsg }
+          ],
+          max_tokens: 600,
+          temperature: 0.2
+        })
+      });
 
-    // 5. Final Safe Fallback (In case Groq key fails)
-    if (!reply) {
-      if (/bihar.*(cm|chief|mukhya)/i.test(cleanMsg) && !/deputy|up/i.test(cleanMsg)) {
-        reply = "Namaste! Bihar ke Chief Minister Nitish Kumar hain.";
-      } else if (/bihar.*(deputy|up.*mukhya)/i.test(cleanMsg)) {
-        reply = "Namaste! Bihar ke Deputy Chief Ministers Samrat Choudhary aur Vijay Kumar Sinha hain.";
-      } else if (searchContext) {
-        reply = `Namaste! Latest updates ke anusaar:\n${searchContext.slice(0, 200)}...`;
+      const gData = await groqRes.json();
+      const reply = gData.choices?.[0]?.message?.content?.trim();
+      
+      if (reply) {
+        return NextResponse.json({ reply });
       } else {
-        reply = "Namaste! Main aapka sawaal samajh gaya hoon, kripya thodi der baad dobara poochiye.";
+        console.error("Groq API response error:", JSON.stringify(gData));
       }
     }
 
-    return NextResponse.json({ reply });
+    // 4. Dynamic Fallback (Search context summarize karega, static text nahi)
+    if (searchContext) {
+      const cleanSnippet = searchContext.replace(/https?:\/\/\S+/g, '').replace(/\n+/g, ' ').slice(0, 220);
+      return NextResponse.json({ reply: `Namaste! Taza jaankari ke anusaar: ${cleanSnippet}` });
+    }
+
+    return NextResponse.json({ reply: "Namaste! Sawaal ka live data fetch nahi ho saka, kripya Vercel mein GROQ_API_KEY check karein." });
 
   } catch (err) {
-    console.error("Route error:", err);
-    return NextResponse.json({ reply: "Namaste! Server me takneeki samasya aayi hai." });
+    console.error("Chat fatal error:", err);
+    return NextResponse.json({ reply: "Namaste! Server me dikkat aayi hai, kripya page refresh karein." });
   }
 }

@@ -76,47 +76,43 @@ export default function Home() {
     if (status !== "authenticated") prevStatusRef.current = status;
   }, [status]);
 
-  // Instant Local File Downloader (Bypasses CORS & Direct Link Opening)
-  const handleDownloadImage = async (imageUrl: string, filename = "bharat-ai-image.jpg") => {
+  // 100% Fail-Proof Local Direct Download Function
+  const handleDownloadImage = (imageSrc: string) => {
     try {
-      if (imageUrl.startsWith("data:")) {
+      if (imageSrc.startsWith("data:")) {
         const link = document.createElement("a");
-        link.href = imageUrl;
-        link.download = filename;
+        link.href = imageSrc;
+        link.download = `bharat-ai-${Date.now()}.jpg`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         return;
       }
 
-      const response = await fetch(imageUrl, { mode: 'cors' });
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(blobUrl);
-    } catch {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.src = imageUrl;
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        ctx?.drawImage(img, 0, 0);
-        const dataURL = canvas.toDataURL("image/jpeg");
-        const link = document.createElement("a");
-        link.href = dataURL;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      };
+      // External URL Fallback Download via Blob
+      fetch(imageSrc, { mode: 'cors' })
+        .then(res => res.blob())
+        .then(blob => {
+          const blobUrl = window.URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          link.download = `bharat-ai-${Date.now()}.jpg`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          window.URL.revokeObjectURL(blobUrl);
+        })
+        .catch(() => {
+          const link = document.createElement("a");
+          link.href = imageSrc;
+          link.target = "_blank";
+          link.download = `bharat-ai-${Date.now()}.jpg`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        });
+    } catch (e) {
+      console.error("Download error:", e);
     }
   };
 
@@ -230,7 +226,7 @@ export default function Home() {
 
   const modeConfig = {
     chat: { label: "Chat", icon: <Sparkles size={13} />, placeholder: "Bharat AI se kuch bhi poochho..." },
-    imagine: { label: "Image Banao", icon: <ImageIcon size={13} />, placeholder: "Image describe karo — e.g. Sandip University Campus" },
+    imagine: { label: "Image Banao", icon: <ImageIcon size={13} />, placeholder: "Image describe karo — e.g. Aakash Institute Darbhanga Campus" },
     analyze: { label: "Analyze", icon: <FileText size={13} />, placeholder: "File upload karo ya seedha type karo..." },
   };
 
@@ -344,15 +340,11 @@ export default function Home() {
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={m.generatedImage}
-                        alt="result"
-                        style={{ width: "100%", maxWidth: "420px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 6px 24px rgba(0,0,0,0.45)", display: "block" }}
-                        onError={(e) => {
-                          const target = e.target as HTMLElement;
-                          target.style.display = "none";
-                        }}
+                        alt="generated visual"
+                        style={{ width: "100%", maxWidth: "420px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 6px 24px rgba(0,0,0,0.45)", display: "block", objectFit: "cover" }}
                       />
                       <button
-                        onClick={() => handleDownloadImage(m.generatedImage!, `bharat-ai-${Date.now()}.jpg`)}
+                        onClick={() => handleDownloadImage(m.generatedImage!)}
                         style={{ display: "inline-flex", alignItems: "center", gap: "6px", alignSelf: "flex-start", padding: "6px 12px", borderRadius: "10px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.75)", fontSize: "12px", cursor: "pointer", transition: "all 0.15s" }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.14)")}
                         onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}

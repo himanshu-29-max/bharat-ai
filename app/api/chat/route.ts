@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import Groq from 'groq-sdk';
 
 export async function POST(req: Request) {
   try {
@@ -19,94 +18,111 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Namaste! Kuch poochiye." });
     }
 
-    // 1. Simple Greetings
+    // 1. GREETING HANDLER
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(cleanMsg.toLowerCase());
     if (isGreeting && !imageBase64 && !fileBase64) {
       return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis vishay mein jaankari chahiye?" });
     }
 
-    // 2. Google Search Context (Serper)
-    let searchContext = "";
+    // 2. REAL-TIME GOOGLE SEARCH (Serper)
+    let searchData = "";
     if (serperKey && cleanMsg.length > 2) {
       try {
         const sRes = await fetch("https://google.serper.dev/search", {
           method: "POST",
           headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
-          body: JSON.stringify({ q: `${cleanMsg} India latest`, gl: "in", hl: "hi", num: 4 }),
+          body: JSON.stringify({
+            q: `${cleanMsg} 2026 latest news update India`,
+            gl: "in",
+            hl: "en",
+            num: 5,
+          }),
         });
         const sd = await sRes.json();
-        if (sd.answerBox?.answer) searchContext += `${sd.answerBox.answer}. `;
-        if (sd.answerBox?.snippet) searchContext += `${sd.answerBox.snippet}. `;
-        const results = sd.organic?.slice(0, 3) || [];
+        if (sd.answerBox?.answer) searchData += `Direct Answer: ${sd.answerBox.answer}\n`;
+        if (sd.answerBox?.snippet) searchData += `${sd.answerBox.snippet}\n`;
+        const results = sd.organic?.slice(0, 4) || [];
         if (results.length > 0) {
-          searchContext += results.map((r: any) => `${r.title}: ${r.snippet}`).join(" ");
+          searchData += results.map((r: any) => `${r.title}: ${r.snippet}`).join("\n");
         }
       } catch (err) {
-        console.error("Search error:", err);
+        console.error("Serper API error:", err);
       }
     }
 
-    const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-User ke sawaal ka accurate, concise aur direct Hinglish mein jawab do (2-3 lines).
-Namaste! se shuru karo.`;
+    const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki taareekh: ${aajKiDate}.
+User ke sawaal ka bilkul taaza aur accurate jawab seedhe Hinglish mein do (2-3 sentences max).
+Live Google Search data ko sabse pehle prioritize karo. Kisi bhi purane static data par depend mat raho.
+Har jawab Namaste! se shuru karo.`;
+
+    const userPrompt = searchData
+      ? `${systemPrompt}\n\n[LIVE SEARCH RESULTS]:\n${searchData}\n\n[USER QUESTION]: ${cleanMsg}`
+      : `${systemPrompt}\n\n[USER QUESTION]: ${cleanMsg}`;
 
     let reply = "";
 
-    // 3. Primary: Groq SDK (Llama 3.1)
-    if (groqKey) {
+    // 3. PRIMARY: Gemini Direct Flash Call
+    if (geminiKey) {
       try {
-        const groq = new Groq({ apiKey: groqKey });
-        const completion = await groq.chat.completions.create({
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: searchContext ? `Search Context: ${searchContext}\n\nQuestion: ${cleanMsg}` : cleanMsg }
-          ],
-          model: "llama-3.1-8b-instant",
-          temperature: 0.3,
-          max_tokens: 600,
-        });
-        reply = completion.choices[0]?.message?.content?.trim() || "";
-      } catch (e) {
-        console.error("Groq SDK error:", e);
-      }
-    }
-
-    // 4. Secondary: Gemini REST
-    if (!reply && geminiKey) {
-      try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: `${systemPrompt}\n\nSearch Context: ${searchContext}\n\nQuestion: ${cleanMsg}` }] }],
-            generationConfig: { temperature: 0.3, maxOutputTokens: 600 }
+            contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+            generationConfig: { temperature: 0.2, maxOutputTokens: 600 }
           })
         });
         const data = await res.json();
         reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
       } catch (e) {
-        console.error("Gemini failed:", e);
+        console.error("Gemini 2.0 error:", e);
       }
     }
 
-    // 5. Context-aware Fallback
+    // 4. SECONDARY: Groq API
+    if (!reply && groqKey) {
+      try {
+        const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${groqKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: searchData ? `Live Data:\n${searchData}\n\nQuestion: ${cleanMsg}` : cleanMsg }
+            ],
+            max_tokens: 500,
+            temperature: 0.2
+          })
+        });
+        const groqData = await groqRes.json();
+        reply = groqData.choices?.[0]?.message?.content?.trim() || "";
+      } catch (e) {
+        console.error("Groq API error:", e);
+      }
+    }
+
+    // 5. LIVE SEARCH DIRECT SUMMARY (Agar LLM key fail ho jaye toh bhi live search output clean dikhega)
     if (!reply) {
-      if (/deputy.*cm|up.*mukhya.*mantri/i.test(cleanMsg)) {
-        reply = "Namaste! Bihar ke Deputy Chief Ministers Samrat Choudhary aur Vijay Kumar Sinha hain.";
-      } else if (/\bcm\b|chief.*minister|mukhya.*mantri/i.test(cleanMsg)) {
-        reply = "Namaste! Bihar ke Chief Minister Nitish Kumar hain.";
-      } else if (searchContext) {
-        const clean = searchContext.replace(/https?:\/\/\S+/g, '').replace(/[@#]\S+/g, '').slice(0, 220);
-        reply = `Namaste! Latest updates: ${clean}`;
+      if (searchData) {
+        const cleanSnippet = searchData
+          .replace(/https?:\/\/\S+/g, '')
+          .replace(/[@#]\S+/g, '')
+          .replace(/\n+/g, ' ')
+          .slice(0, 250);
+        reply = `Namaste! Taza jaankari ke anusaar: ${cleanSnippet}`;
       } else {
-        reply = "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye.";
+        reply = "Namaste! Live data load karne me samasya aayi. Kripya kuch samay baad dobara prayas karein.";
       }
     }
 
     return NextResponse.json({ reply });
 
   } catch (err) {
-    console.error("Chat error:", err);
-    return NextResponse.json({ reply: "Namaste! Server se connect karne mein samasya aayi." });
+    console.error("Chat route fatal:", err);
+    return NextResponse.json({ reply: "Namaste! Server issue aaya hai, kripya page refresh karein." });
   }
 }

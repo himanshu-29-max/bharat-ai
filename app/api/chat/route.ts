@@ -6,6 +6,7 @@ export async function POST(req: Request) {
 
     const groqKey = process.env.GROQ_API_KEY?.trim() || process.env.NEXT_PUBLIC_GROQ_API_KEY?.trim();
     const tavilyKey = process.env.NEXT_PUBLIC_TAVILY_API_KEY?.trim() || process.env.TAVILY_API_KEY?.trim();
+    const serperKey = process.env.NEXT_PUBLIC_SERPER_API_KEY?.trim() || process.env.SERPER_API_KEY?.trim();
 
     const now = new Date();
     const aajKiDate = now.toLocaleDateString('en-IN', {
@@ -17,15 +18,48 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Namaste! Kuch poochiye." });
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🎨 1. IMAGE GENERATION (Mode: Imagine / Image Banao)
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const isImageIntent = mode === "imagine" || /^(image banao|photo banao|generate image|draw|create image)/i.test(cleanMsg) || cleanMsg.toLowerCase().endsWith("ka image") || cleanMsg.toLowerCase().endsWith("ki photo");
+    const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
 
-    if (isImageIntent) {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 📸 1. REAL PHOTO FETCH (For real places, universities, celebrities)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const isRealPhotoRequest = /(ka photo|ki photo|ka image|ki image|dikhao|real image|real photo)/i.test(cleanMsg) && mode !== "imagine";
+    
+    if (isRealPhotoRequest && (serperKey || tavilyKey)) {
+      const searchQuery = cleanMsg
+        .replace(/(ka photo|ki photo|ka image|ki image|dikhao|photo|image|real)/gi, "")
+        .trim();
+
+      // Attempt Serper Images API
+      if (serperKey) {
+        try {
+          const imgRes = await fetch("https://google.serper.dev/images", {
+            method: "POST",
+            headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
+            body: JSON.stringify({ q: `${searchQuery} official campus building`, gl: "in", hl: "hi", num: 1 }),
+          });
+          const imgData = await imgRes.json();
+          if (imgData.images?.[0]?.imageUrl) {
+            return NextResponse.json({
+              reply: `✅ Yeh rahi ${searchQuery} ki real photo!`,
+              generatedImage: imgData.images[0].imageUrl
+            });
+          }
+        } catch (e) {
+          console.error("Serper image fetch failed:", e);
+        }
+      }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🎨 2. AI CREATIVE GENERATION (For imaginative prompts)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const isCreativeImage = mode === "imagine" || /^(image banao|photo banao|generate image|draw|create image)/i.test(cleanMsg);
+
+    if (isCreativeImage) {
       try {
         const cleanPrompt = cleanMsg
-          .replace(/(image banao|photo banao|generate image|draw|create image|ka image|ki photo|image|photo)/gi, "")
+          .replace(/(image banao|photo banao|generate image|draw|create image|ka image|ki photo)/gi, "")
           .trim() || cleanMsg;
 
         const seed = Math.floor(Math.random() * 999999);
@@ -36,7 +70,7 @@ export async function POST(req: Request) {
           const buffer = await imgRes.arrayBuffer();
           const base64 = Buffer.from(buffer).toString("base64");
           return NextResponse.json({
-            reply: `✅ Yeh rahi ${cleanPrompt} ki image!`,
+            reply: `✅ Yeh rahi aapki image!`,
             generatedImage: `data:image/jpeg;base64,${base64}`
           });
         }
@@ -46,9 +80,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Image generate karne me samasya aayi, kripya dobara try karein!" });
     }
 
-    const lowerMsg = cleanMsg.toLowerCase().replace(/[?.,!]/g, "").trim();
-
-    // 2. GREETINGS & CASUAL INTENTS
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 💬 3. GREETINGS & CASUAL INTENTS
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const isGreeting = /^(hi|hello|hey|namaste|hii|helo)$/i.test(lowerMsg);
     if (isGreeting && !imageBase64 && !fileBase64 && (!history || history.length === 0)) {
       return NextResponse.json({ reply: "Namaste! Main Bharat AI hoon. Aaj kis baare mein baat karna chahte hain?" });
@@ -59,7 +93,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ reply: "Main ekdum badhiya hoon bhai! Aap batao, aaj kya janna ya poochna chahte ho?" });
     }
 
-    // 3. LIVE WEB SEARCH (Har information & factual query ke liye)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🔍 4. LIVE SEARCH & INTEL
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     let searchContext = "";
     if (cleanMsg.length > 2 && tavilyKey) {
       try {
@@ -84,11 +120,9 @@ export async function POST(req: Request) {
       }
     }
 
-    // 4. PERSONA PROMPT
     const systemPrompt = `Tu Bharat AI hai, banaya hai Himanshu Ranjan ne. Aaj ki date: ${aajKiDate}.
-Aap ek intelligent, natural aur helpful AI assistant ho (jaise ChatGPT/Gemini).
+Aap ek intelligent, natural aur conversational AI assistant ho (jaise ChatGPT/Gemini).
 - User ke sawaal ka concise, accurate aur natural Hinglish me pura sentence complete karke jawab do.
-- University/Colleges/Places ke baare mein clearly batao (location, courses, details).
 - Namaste! se shuru karo.`;
 
     const formattedHistory = Array.isArray(history)
@@ -102,7 +136,9 @@ Aap ek intelligent, natural aur helpful AI assistant ho (jaise ChatGPT/Gemini).
       ? `Live Search Information:\n${searchContext}\n\nUser Question: ${cleanMsg}`
       : cleanMsg;
 
-    // 5. GROQ LLM EXECUTION
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🤖 5. GROQ LLM INFERENCE
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (groqKey) {
       try {
         const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -133,7 +169,7 @@ Aap ek intelligent, natural aur helpful AI assistant ho (jaise ChatGPT/Gemini).
       }
     }
 
-    // 6. SENTENCE-SAFE FALLBACK
+    // Fallback
     if (searchContext) {
       const cleanText = searchContext
         .replace(/https?:\/\/\S+/g, '')
@@ -148,7 +184,7 @@ Aap ek intelligent, natural aur helpful AI assistant ho (jaise ChatGPT/Gemini).
     return NextResponse.json({ reply: "Namaste! Main aapka sawaal samajh gaya hoon. Kripya thodi der baad dobara poochiye." });
 
   } catch (err) {
-    console.error("Chat route fatal:", err);
-    return NextResponse.json({ reply: "Namaste! Server me takneeki samasya aayi hai." });
+    console.error("Chat fatal error:", err);
+    return NextResponse.json({ reply: "Namaste! Server issue aaya hai, kripya refresh karein." });
   }
 }

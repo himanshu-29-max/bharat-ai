@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { Send, Plus, X, Sparkles, ImageIcon, FileText, Trash2, MessageSquare, LogOut, Menu, PenSquare } from "lucide-react";
+import { Send, Plus, X, Sparkles, ImageIcon, FileText, Trash2, MessageSquare, LogOut, Menu, PenSquare, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
 type Message = { role: "user" | "bot"; content: string; image?: string; fileName?: string; generatedImage?: string };
@@ -18,7 +18,6 @@ async function readFile(file: File): Promise<AttachedFile> {
     const isImage = file.type.startsWith("image/");
     const isPDF = file.type === "application/pdf";
     reader.onerror = reject;
-    // Images and PDFs → base64 via readAsDataURL
     if (isImage || isPDF) {
       reader.onloadend = () => {
         const result = reader.result as string;
@@ -27,7 +26,6 @@ async function readFile(file: File): Promise<AttachedFile> {
       };
       reader.readAsDataURL(file);
     } else {
-      // Text files → plain text
       reader.onloadend = () => resolve({ type: "text", data: reader.result as string, name: file.name, mime: file.type });
       reader.readAsText(file);
     }
@@ -78,14 +76,69 @@ export default function Home() {
     if (status !== "authenticated") prevStatusRef.current = status;
   }, [status]);
 
+  // Instant Local File Downloader (Bypasses CORS & Direct Link Opening)
+  const handleDownloadImage = async (imageUrl: string, filename = "bharat-ai-image.jpg") => {
+    try {
+      if (imageUrl.startsWith("data:")) {
+        const link = document.createElement("a");
+        link.href = imageUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      const response = await fetch(imageUrl, { mode: 'cors' });
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = imageUrl;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(img, 0, 0);
+        const dataURL = canvas.toDataURL("image/jpeg");
+        const link = document.createElement("a");
+        link.href = dataURL;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+    }
+  };
+
   const saveChat = useCallback(async (msgs: Message[], chatId: string) => {
     if (status !== "authenticated" || msgs.length <= 1) return;
     const title = msgs.find(m => m.role === "user")?.content?.slice(0, 40) || "Naya Chat";
     try {
-      const saveMsgs = msgs.map(m => ({ role: m.role, content: m.content, fileName: m.fileName, generatedImage: m.generatedImage?.startsWith("http") ? m.generatedImage : undefined }));
-      await fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, title, messages: saveMsgs }) });
+      const saveMsgs = msgs.map(m => ({
+        role: m.role,
+        content: m.content,
+        fileName: m.fileName,
+        generatedImage: m.generatedImage?.startsWith("http") ? m.generatedImage : undefined
+      }));
+      await fetch("/api/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId, title, messages: saveMsgs })
+      });
       setChats(prev => [{ id: chatId, title, updatedAt: Date.now() }, ...prev.filter(c => c.id !== chatId)].slice(0, 50));
-    } catch (e) { console.error("Save failed:", e); }
+    } catch (e) {
+      console.error("Save failed:", e);
+    }
   }, [status]);
 
   const loadChat = async (chatId: string) => {
@@ -98,7 +151,9 @@ export default function Home() {
         setCurrentChatId(chatId);
       }
       if (isMobile) setSidebarOpen(false);
-    } catch (e) { console.error("Load failed:", e); }
+    } catch (e) {
+      console.error("Load failed:", e);
+    }
   };
 
   const deleteChat = async (e: React.MouseEvent, chatId: string) => {
@@ -109,8 +164,11 @@ export default function Home() {
   };
 
   const newChat = () => {
-    setCurrentChatId(genId()); setMessages([{ role: "bot", content: WELCOME }]);
-    setHistory([]); setInput(""); setAttachedFile(null);
+    setCurrentChatId(genId());
+    setMessages([{ role: "bot", content: WELCOME }]);
+    setHistory([]);
+    setInput("");
+    setAttachedFile(null);
     if (isMobile) setSidebarOpen(false);
   };
 
@@ -122,7 +180,9 @@ export default function Home() {
       const result = await readFile(file);
       setAttachedFile(result);
       setMode("analyze");
-    } catch { alert("File read nahi ho paya!"); }
+    } catch {
+      alert("File read nahi ho paya!");
+    }
     e.target.value = "";
   };
 
@@ -139,14 +199,16 @@ export default function Home() {
       fileName: (file?.type === "pdf" || file?.type === "text") ? file.name : undefined,
     };
     const newMessages = [...messages, newMsg];
-    setMessages(newMessages); setInput(""); setAttachedFile(null); setIsLoading(true);
+    setMessages(newMessages);
+    setInput("");
+    setAttachedFile(null);
+    setIsLoading(true);
 
     try {
       const body: any = { message: userMsg, history, mode: currentMode === "imagine" ? "imagine" : undefined };
       if (file?.type === "image") body.imageBase64 = `data:${file.mime};base64,${file.data}`;
       if (file?.type === "pdf") { body.fileBase64 = file.data; body.fileMime = "application/pdf"; }
       if (file?.type === "text") {
-        // Encode text safely for JSON transport
         try { body.fileBase64 = btoa(unescape(encodeURIComponent(file.data))); } catch { body.fileBase64 = btoa(file.data); }
         body.fileMime = "text/plain";
       }
@@ -159,175 +221,196 @@ export default function Home() {
       if (currentMode === "chat") setHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "assistant", content: data.reply }]);
       clearTimeout(saveTimeout.current);
       saveTimeout.current = setTimeout(() => saveChat(finalMessages, currentChatId), 1500);
-    } catch { setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai! 🙏" }]); }
-    finally { setTimeout(() => setIsLoading(false), 300); }
+    } catch {
+      setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai! 🙏" }]);
+    } finally {
+      setTimeout(() => setIsLoading(false), 300);
+    }
   };
 
   const modeConfig = {
     chat: { label: "Chat", icon: <Sparkles size={13} />, placeholder: "Bharat AI se kuch bhi poochho..." },
-    imagine: { label: "Image Banao", icon: <ImageIcon size={13} />, placeholder: "Image describe karo — e.g. sunset over Taj Mahal" },
+    imagine: { label: "Image Banao", icon: <ImageIcon size={13} />, placeholder: "Image describe karo — e.g. Sandip University Campus" },
     analyze: { label: "Analyze", icon: <FileText size={13} />, placeholder: "File upload karo ya seedha type karo..." },
   };
 
   const groupChats = (list: Chat[]) => {
     const now = Date.now();
     const g: Record<string, Chat[]> = { "Aaj": [], "Is Hafte": [], "Is Mahine": [], "Purane": [] };
-    list.forEach(c => { const d = (now - c.updatedAt) / 86400000; if (d < 1) g["Aaj"].push(c); else if (d < 7) g["Is Hafte"].push(c); else if (d < 30) g["Is Mahine"].push(c); else g["Purane"].push(c); });
+    list.forEach(c => {
+      const d = (now - c.updatedAt) / 86400000;
+      if (d < 1) g["Aaj"].push(c);
+      else if (d < 7) g["Is Hafte"].push(c);
+      else if (d < 30) g["Is Mahine"].push(c);
+      else g["Purane"].push(c);
+    });
     return g;
   };
   const grouped = groupChats(chats);
 
   return (
-    <div style={{ display:"flex", height:"100vh", overflow:"hidden", background:"#0a0a0f", fontFamily:"'Segoe UI',system-ui,sans-serif", color:"#fff" }}>
-      {sidebarOpen && isMobile && <div onClick={() => setSidebarOpen(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:40 }}/>}
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "#0a0a0f", fontFamily: "'Segoe UI',system-ui,sans-serif", color: "#fff" }}>
+      {sidebarOpen && isMobile && <div onClick={() => setSidebarOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40 }} />}
 
       {/* SIDEBAR */}
-      <div style={{ width:"255px", flexShrink:0, display:"flex", flexDirection:"column", background:"rgba(255,255,255,0.015)", borderRight:"1px solid rgba(255,255,255,0.06)", transform:sidebarOpen?"translateX(0)":"translateX(-100%)", transition:"transform 0.25s ease", position:isMobile?"fixed":"relative", height:"100vh", zIndex:45 }}>
-        <div style={{ padding:"14px", borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"12px" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
-              <div style={{ display:"flex", flexDirection:"column", borderRadius:"3px", overflow:"hidden", width:"20px", height:"14px" }}>
-                <div style={{ flex:1, background:"#FF9933" }}/><div style={{ flex:1, background:"#fff" }}/><div style={{ flex:1, background:"#138808" }}/>
+      <div style={{ width: "255px", flexShrink: 0, display: "flex", flexDirection: "column", background: "rgba(255,255,255,0.015)", borderRight: "1px solid rgba(255,255,255,0.06)", transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)", transition: "transform 0.25s ease", position: isMobile ? "fixed" : "relative", height: "100vh", zIndex: 45 }}>
+        <div style={{ padding: "14px", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div style={{ display: "flex", flexDirection: "column", borderRadius: "3px", overflow: "hidden", width: "20px", height: "14px" }}>
+                <div style={{ flex: 1, background: "#FF9933" }} /><div style={{ flex: 1, background: "#fff" }} /><div style={{ flex: 1, background: "#138808" }} />
               </div>
-              <span style={{ fontWeight:700, fontSize:"15px", background:"linear-gradient(90deg,#FF9933,#fff 50%,#138808)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>Bharat AI</span>
+              <span style={{ fontWeight: 700, fontSize: "15px", background: "linear-gradient(90deg,#FF9933,#fff 50%,#138808)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Bharat AI</span>
             </div>
-            {isMobile && <button onClick={() => setSidebarOpen(false)} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.3)", cursor:"pointer" }}><X size={16}/></button>}
+            {isMobile && <button onClick={() => setSidebarOpen(false)} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)", cursor: "pointer" }}><X size={16} /></button>}
           </div>
-          <button onClick={newChat} style={{ width:"100%", padding:"8px 12px", borderRadius:"10px", cursor:"pointer", background:"rgba(255,153,51,0.08)", border:"1px solid rgba(255,153,51,0.2)", color:"#FF9933", fontSize:"13px", fontWeight:600, display:"flex", alignItems:"center", gap:"7px" }}>
-            <PenSquare size={14}/> Naya Chat
+          <button onClick={newChat} style={{ width: "100%", padding: "8px 12px", borderRadius: "10px", cursor: "pointer", background: "rgba(255,153,51,0.08)", border: "1px solid rgba(255,153,51,0.2)", color: "#FF9933", fontSize: "13px", fontWeight: 600, display: "flex", alignItems: "center", gap: "7px" }}>
+            <PenSquare size={14} /> Naya Chat
           </button>
         </div>
-        <div style={{ flex:1, overflowY:"auto", padding:"6px 8px", scrollbarWidth:"none" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "6px 8px", scrollbarWidth: "none" }}>
           {chats.length === 0 ? (
-            <div style={{ textAlign:"center", color:"rgba(255,255,255,0.18)", fontSize:"12px", padding:"32px 12px" }}>
-              <MessageSquare size={22} style={{ margin:"0 auto 8px", display:"block", opacity:0.3 }}/>Abhi koi chat nahi
+            <div style={{ textAlign: "center", color: "rgba(255,255,255,0.18)", fontSize: "12px", padding: "32px 12px" }}>
+              <MessageSquare size={22} style={{ margin: "0 auto 8px", display: "block", opacity: 0.3 }} />Abhi koi chat nahi
             </div>
           ) : Object.entries(grouped).map(([group, list]) => list.length === 0 ? null : (
             <div key={group}>
-              <div style={{ fontSize:"10px", color:"rgba(255,255,255,0.22)", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", padding:"10px 6px 4px" }}>{group}</div>
+              <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.22)", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", padding: "10px 6px 4px" }}>{group}</div>
               {list.map(chat => (
                 <div key={chat.id} onClick={() => loadChat(chat.id)} className="chat-item"
-                  style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"7px 8px", borderRadius:"8px", cursor:"pointer", marginBottom:"1px", background:currentChatId===chat.id?"rgba(255,153,51,0.08)":"transparent", border:currentChatId===chat.id?"1px solid rgba(255,153,51,0.18)":"1px solid transparent", transition:"all 0.15s" }}>
-                  <span style={{ fontSize:"12.5px", color:currentChatId===chat.id?"#FF9933":"rgba(255,255,255,0.55)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{chat.title}</span>
-                  <button onClick={e => deleteChat(e, chat.id)} className="delete-btn" style={{ background:"none", border:"none", cursor:"pointer", color:"rgba(255,255,255,0.2)", padding:"2px", flexShrink:0, opacity:0, transition:"opacity 0.15s" }}><Trash2 size={12}/></button>
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 8px", borderRadius: "8px", cursor: "pointer", marginBottom: "1px", background: currentChatId === chat.id ? "rgba(255,153,51,0.08)" : "transparent", border: currentChatId === chat.id ? "1px solid rgba(255,153,51,0.18)" : "1px solid transparent", transition: "all 0.15s" }}>
+                  <span style={{ fontSize: "12.5px", color: currentChatId === chat.id ? "#FF9933" : "rgba(255,255,255,0.55)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{chat.title}</span>
+                  <button onClick={e => deleteChat(e, chat.id)} className="delete-btn" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.2)", padding: "2px", flexShrink: 0, opacity: 0, transition: "opacity 0.15s" }}><Trash2 size={12} /></button>
                 </div>
               ))}
             </div>
           ))}
         </div>
         {session?.user && (
-          <div style={{ padding:"10px 14px", borderTop:"1px solid rgba(255,255,255,0.05)", display:"flex", alignItems:"center", gap:"9px" }}>
-            {session.user.image && <img src={session.user.image} style={{ width:"30px", height:"30px", borderRadius:"50%", border:"1px solid rgba(255,255,255,0.1)" }} alt="avatar"/>}
-            <div style={{ flex:1, overflow:"hidden" }}>
-              <div style={{ fontSize:"12px", fontWeight:600, color:"rgba(255,255,255,0.75)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{session.user.name}</div>
-              <div style={{ fontSize:"10px", color:"rgba(255,255,255,0.28)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{session.user.email}</div>
+          <div style={{ padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.05)", display: "flex", alignItems: "center", gap: "9px" }}>
+            {session.user.image && <img src={session.user.image} style={{ width: "30px", height: "30px", borderRadius: "50%", border: "1px solid rgba(255,255,255,0.1)" }} alt="avatar" />}
+            <div style={{ flex: 1, overflow: "hidden" }}>
+              <div style={{ fontSize: "12px", fontWeight: 600, color: "rgba(255,255,255,0.75)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user.name}</div>
+              <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.28)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user.email}</div>
             </div>
-            <button onClick={() => signOut({ callbackUrl:"/login" })}
-              onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color="#ff4444"}
-              onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color="rgba(255,255,255,0.22)"}
-              style={{ background:"none", border:"none", cursor:"pointer", color:"rgba(255,255,255,0.22)", padding:"4px", borderRadius:"6px", transition:"color 0.15s" }}>
-              <LogOut size={14}/>
+            <button onClick={() => signOut({ callbackUrl: "/login" })}
+              onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color = "#ff4444"}
+              onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.22)"}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.22)", padding: "4px", borderRadius: "6px", transition: "color 0.15s" }}>
+              <LogOut size={14} />
             </button>
           </div>
         )}
       </div>
 
-      {/* MAIN */}
-      <main style={{ flex:1, display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", position:"relative", background:"linear-gradient(135deg,#0a0a0f 0%,#0d0a1a 50%,#0a0f0a 100%)" }}>
-        <div style={{ position:"absolute", top:"-20%", left:"10%", width:"500px", height:"500px", background:"radial-gradient(circle,rgba(255,153,51,0.05) 0%,transparent 70%)", borderRadius:"50%", filter:"blur(40px)", pointerEvents:"none", zIndex:0 }}/>
-        <div style={{ position:"absolute", bottom:"-20%", right:"5%", width:"400px", height:"400px", background:"radial-gradient(circle,rgba(19,136,8,0.05) 0%,transparent 70%)", borderRadius:"50%", filter:"blur(40px)", pointerEvents:"none", zIndex:0 }}/>
+      {/* MAIN CHAT VIEW */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden", position: "relative", background: "linear-gradient(135deg,#0a0a0f 0%,#0d0a1a 50%,#0a0f0a 100%)" }}>
+        <div style={{ position: "absolute", top: "-20%", left: "10%", width: "500px", height: "500px", background: "radial-gradient(circle,rgba(255,153,51,0.05) 0%,transparent 70%)", borderRadius: "50%", filter: "blur(40px)", pointerEvents: "none", zIndex: 0 }} />
+        <div style={{ position: "absolute", bottom: "-20%", right: "5%", width: "400px", height: "400px", background: "radial-gradient(circle,rgba(19,136,8,0.05) 0%,transparent 70%)", borderRadius: "50%", filter: "blur(40px)", pointerEvents: "none", zIndex: 0 }} />
 
-        <header style={{ flexShrink:0, padding:"11px 18px", display:"flex", alignItems:"center", gap:"10px", borderBottom:"1px solid rgba(255,255,255,0.05)", background:"rgba(10,10,15,0.85)", backdropFilter:"blur(20px)", zIndex:30 }}>
+        <header style={{ flexShrink: 0, padding: "11px 18px", display: "flex", alignItems: "center", gap: "10px", borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(10,10,15,0.85)", backdropFilter: "blur(20px)", zIndex: 30 }}>
           <button onClick={() => setSidebarOpen(!sidebarOpen)}
-            onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color="#fff"}
-            onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color="rgba(255,255,255,0.35)"}
-            style={{ background:"none", border:"none", color:"rgba(255,255,255,0.35)", cursor:"pointer", padding:"4px", borderRadius:"6px", display:"flex", transition:"color 0.15s" }}>
-            <Menu size={19}/>
+            onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color = "#fff"}
+            onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.35)"}
+            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.35)", cursor: "pointer", padding: "4px", borderRadius: "6px", display: "flex", transition: "color 0.15s" }}>
+            <Menu size={19} />
           </button>
-          <div style={{ fontSize:"15px", fontWeight:700, background:"linear-gradient(90deg,#FF9933,#fff 50%,#138808)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>Bharat AI</div>
-          <div style={{ flex:1 }}/>
-          <div style={{ display:"flex", alignItems:"center", gap:"5px", background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:"16px", padding:"4px 9px" }}>
-            <div style={{ width:"5px", height:"5px", borderRadius:"50%", background:"#22c55e", boxShadow:"0 0 4px #22c55e" }}/>
-            <span style={{ fontSize:"10px", color:"rgba(255,255,255,0.3)", letterSpacing:"0.08em" }}>ONLINE</span>
+          <div style={{ fontSize: "15px", fontWeight: 700, background: "linear-gradient(90deg,#FF9933,#fff 50%,#138808)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Bharat AI</div>
+          <div style={{ flex: 1 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: "5px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "16px", padding: "4px 9px" }}>
+            <div style={{ width: "5px", height: "5px", borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 4px #22c55e" }} />
+            <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.3)", letterSpacing: "0.08em" }}>ONLINE</span>
           </div>
         </header>
 
-        <div ref={chatAreaRef} style={{ flex:1, overflowY:"auto", padding:"24px 16px 20px", scrollbarWidth:"none", position:"relative", zIndex:1 }}>
-          <div style={{ maxWidth:"700px", margin:"0 auto", display:"flex", flexDirection:"column", gap:"18px" }}>
+        <div ref={chatAreaRef} style={{ flex: 1, overflowY: "auto", padding: "24px 16px 20px", scrollbarWidth: "none", position: "relative", zIndex: 1 }}>
+          <div style={{ maxWidth: "700px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "18px" }}>
             {messages.map((m, i) => (
-              <div key={i} style={{ display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start", animation:"fadeIn 0.3s ease" }}>
-                {m.role==="bot" && <div style={{ width:"28px", height:"28px", borderRadius:"50%", flexShrink:0, background:"linear-gradient(135deg,#FF9933,#138808)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"12px", marginRight:"8px", marginTop:"3px", boxShadow:"0 0 8px rgba(255,153,51,0.2)" }}>🇮🇳</div>}
-                <div style={{ maxWidth:"78%" }}>
-                  {m.image && <img src={m.image} alt="upload" style={{ maxWidth:"220px", borderRadius:"12px", marginBottom:"6px", display:"block", marginLeft:"auto" }}/>}
+              <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", animation: "fadeIn 0.3s ease" }}>
+                {m.role === "bot" && <div style={{ width: "28px", height: "28px", borderRadius: "50%", flexShrink: 0, background: "linear-gradient(135deg,#FF9933,#138808)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", marginRight: "8px", marginTop: "3px", boxShadow: "0 0 8px rgba(255,153,51,0.2)" }}>🇮🇳</div>}
+                <div style={{ maxWidth: "78%" }}>
+                  {m.image && <img src={m.image} alt="upload" style={{ maxWidth: "220px", borderRadius: "12px", marginBottom: "6px", display: "block", marginLeft: "auto" }} />}
                   {m.fileName && (
-                    <div style={{ display:"flex", alignItems:"center", gap:"6px", background:"rgba(255,153,51,0.1)", border:"1px solid rgba(255,153,51,0.25)", borderRadius:"8px", padding:"6px 12px", marginBottom:"6px", marginLeft:"auto", width:"fit-content" }}>
-                      <FileText size={14} color="#FF9933"/>
-                      <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.fileName}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "rgba(255,153,51,0.1)", border: "1px solid rgba(255,153,51,0.25)", borderRadius: "8px", padding: "6px 12px", marginBottom: "6px", marginLeft: "auto", width: "fit-content" }}>
+                      <FileText size={14} color="#FF9933" />
+                      <span style={{ fontSize: "12px", color: "#FF9933", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.fileName}</span>
                     </div>
                   )}
-                  <div style={{ padding:"11px 15px", borderRadius:m.role==="user"?"16px 16px 3px 16px":"16px 16px 16px 3px", background:m.role==="user"?"linear-gradient(135deg,#FF9933,#e8851a)":"rgba(255,255,255,0.04)", border:m.role==="bot"?"1px solid rgba(255,255,255,0.06)":"none", color:m.role==="user"?"#000":"rgba(255,255,255,0.87)", fontSize:"14px", lineHeight:"1.65", fontWeight:m.role==="user"?600:400, backdropFilter:m.role==="bot"?"blur(10px)":"none" }}>
-                    {m.role==="bot" ? <div className="prose prose-invert max-w-none" style={{ fontSize:"14px" }}><ReactMarkdown>{m.content}</ReactMarkdown></div> : <span>{m.content}</span>}
+                  <div style={{ padding: "11px 15px", borderRadius: m.role === "user" ? "16px 16px 3px 16px" : "16px 16px 16px 3px", background: m.role === "user" ? "linear-gradient(135deg,#FF9933,#e8851a)" : "rgba(255,255,255,0.04)", border: m.role === "bot" ? "1px solid rgba(255,255,255,0.06)" : "none", color: m.role === "user" ? "#000" : "rgba(255,255,255,0.87)", fontSize: "14px", lineHeight: "1.65", fontWeight: m.role === "user" ? 600 : 400, backdropFilter: m.role === "bot" ? "blur(10px)" : "none" }}>
+                    {m.role === "bot" ? <div className="prose prose-invert max-w-none" style={{ fontSize: "14px" }}><ReactMarkdown>{m.content}</ReactMarkdown></div> : <span>{m.content}</span>}
                   </div>
                   {m.generatedImage && (
-                    <div style={{ marginTop:"8px" }}>
+                    <div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={m.generatedImage} alt="generated"
-                        style={{ width:"100%", maxWidth:"420px", borderRadius:"12px", border:"1px solid rgba(255,255,255,0.07)", boxShadow:"0 6px 24px rgba(0,0,0,0.35)", display:"block" }}
-                        onError={e => { (e.target as HTMLImageElement).style.display="none"; }}
+                      <img
+                        src={m.generatedImage}
+                        alt="result"
+                        style={{ width: "100%", maxWidth: "420px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 6px 24px rgba(0,0,0,0.45)", display: "block" }}
+                        onError={(e) => {
+                          const target = e.target as HTMLElement;
+                          target.style.display = "none";
+                        }}
                       />
-                      <a href={m.generatedImage} target="_blank" rel="noreferrer" download style={{ display:"inline-flex", alignItems:"center", gap:"4px", marginTop:"5px", padding:"4px 10px", borderRadius:"12px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", color:"rgba(255,255,255,0.35)", fontSize:"11px", textDecoration:"none" }}>⬇️ Download</a>
+                      <button
+                        onClick={() => handleDownloadImage(m.generatedImage!, `bharat-ai-${Date.now()}.jpg`)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "6px", alignSelf: "flex-start", padding: "6px 12px", borderRadius: "10px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.75)", fontSize: "12px", cursor: "pointer", transition: "all 0.15s" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.14)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
+                      >
+                        <Download size={13} /> Download
+                      </button>
                     </div>
                   )}
                 </div>
               </div>
             ))}
             {isLoading && (
-              <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
-                <div style={{ width:"28px", height:"28px", borderRadius:"50%", background:"linear-gradient(135deg,#FF9933,#138808)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"12px" }}>🇮🇳</div>
-                <div style={{ display:"flex", gap:"4px" }}>
-                  {[0,1,2].map(i => <div key={i} style={{ width:"6px", height:"6px", borderRadius:"50%", background:i===0?"#FF9933":i===1?"#fff":"#138808", animation:`bounce 0.9s ease ${i*0.15}s infinite` }}/>)}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "linear-gradient(135deg,#FF9933,#138808)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px" }}>🇮🇳</div>
+                <div style={{ display: "flex", gap: "4px" }}>
+                  {[0, 1, 2].map(i => <div key={i} style={{ width: "6px", height: "6px", borderRadius: "50%", background: i === 0 ? "#FF9933" : i === 1 ? "#fff" : "#138808", animation: `bounce 0.9s ease ${i * 0.15}s infinite` }} />)}
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        <div style={{ flexShrink:0, padding:"10px 16px 16px", background:"linear-gradient(to top,#0a0a0f 80%,transparent)", zIndex:10 }}>
-          <div style={{ maxWidth:"700px", margin:"0 auto" }}>
-            <div style={{ display:"flex", gap:"6px", marginBottom:"7px", justifyContent:"center" }}>
+        <div style={{ flexShrink: 0, padding: "10px 16px 16px", background: "linear-gradient(to top,#0a0a0f 80%,transparent)", zIndex: 10 }}>
+          <div style={{ maxWidth: "700px", margin: "0 auto" }}>
+            <div style={{ display: "flex", gap: "6px", marginBottom: "7px", justifyContent: "center" }}>
               {(Object.keys(modeConfig) as Mode[]).map(m => (
-                <button key={m} onClick={() => setMode(m)} style={{ display:"flex", alignItems:"center", gap:"4px", padding:"4px 11px", borderRadius:"16px", fontSize:"11.5px", fontWeight:600, cursor:"pointer", transition:"all 0.15s", background:mode===m?"rgba(255,153,51,0.1)":"rgba(255,255,255,0.03)", border:mode===m?"1px solid rgba(255,153,51,0.3)":"1px solid rgba(255,255,255,0.06)", color:mode===m?"#FF9933":"rgba(255,255,255,0.28)" }}>
+                <button key={m} onClick={() => setMode(m)} style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 11px", borderRadius: "16px", fontSize: "11.5px", fontWeight: 600, cursor: "pointer", transition: "all 0.15s", background: mode === m ? "rgba(255,153,51,0.1)" : "rgba(255,255,255,0.03)", border: mode === m ? "1px solid rgba(255,153,51,0.3)" : "1px solid rgba(255,255,255,0.06)", color: mode === m ? "#FF9933" : "rgba(255,255,255,0.28)" }}>
                   {modeConfig[m].icon}{modeConfig[m].label}
                 </button>
               ))}
             </div>
             {attachedFile && (
-              <div style={{ marginBottom:"7px", display:"inline-flex", alignItems:"center", gap:"7px", padding:"5px 10px", background:"rgba(255,153,51,0.08)", border:"1px solid rgba(255,153,51,0.2)", borderRadius:"10px" }}>
+              <div style={{ marginBottom: "7px", display: "inline-flex", alignItems: "center", gap: "7px", padding: "5px 10px", background: "rgba(255,153,51,0.08)", border: "1px solid rgba(255,153,51,0.2)", borderRadius: "10px" }}>
                 {attachedFile.type === "image"
-                  ? <img src={`data:${attachedFile.mime};base64,${attachedFile.data}`} style={{ width:"32px", height:"32px", borderRadius:"5px", objectFit:"cover" }} alt="preview"/>
-                  : <FileText size={15} color="#FF9933"/>}
-                <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{attachedFile.name}</span>
-                <button onClick={() => setAttachedFile(null)} style={{ background:"none", border:"none", cursor:"pointer", color:"#ff3b30", fontSize:"16px", lineHeight:1 }}>×</button>
+                  ? <img src={`data:${attachedFile.mime};base64,${attachedFile.data}`} style={{ width: "32px", height: "32px", borderRadius: "5px", objectFit: "cover" }} alt="preview" />
+                  : <FileText size={15} color="#FF9933" />}
+                <span style={{ fontSize: "12px", color: "#FF9933", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{attachedFile.name}</span>
+                <button onClick={() => setAttachedFile(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#ff3b30", fontSize: "16px", lineHeight: 1 }}>×</button>
               </div>
             )}
-            <div style={{ display:"flex", alignItems:"flex-end", gap:"7px", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"16px", padding:"7px 7px 7px 13px", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", backdropFilter:"blur(20px)" }}>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: "7px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "7px 7px 7px 13px", boxShadow: "0 4px 20px rgba(0,0,0,0.3)", backdropFilter: "blur(20px)" }}>
               <button onClick={() => fileInputRef.current?.click()} title="Image, PDF, Word, Excel, TXT..."
-                style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"9px", padding:"6px", cursor:"pointer", color:"rgba(255,255,255,0.4)", flexShrink:0, display:"flex" }}>
-                <Plus size={15}/>
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "9px", padding: "6px", cursor: "pointer", color: "rgba(255,255,255,0.4)", flexShrink: 0, display: "flex" }}>
+                <Plus size={15} />
               </button>
-              <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display:"none" }}
-                accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.json,.md"/>
+              <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }}
+                accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.json,.md" />
               <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();handleSend();}}}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                 placeholder={modeConfig[mode].placeholder} rows={1}
-                style={{ flex:1, background:"transparent", border:"none", outline:"none", color:"rgba(255,255,255,0.87)", fontSize:"14px", lineHeight:"1.5", resize:"none", fontFamily:"inherit", padding:"4px 0" }}/>
+                style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "rgba(255,255,255,0.87)", fontSize: "14px", lineHeight: "1.5", resize: "none", fontFamily: "inherit", padding: "4px 0" }} />
               <button onClick={handleSend} disabled={isLoading}
-                style={{ background:input.trim()||attachedFile?"linear-gradient(135deg,#FF9933,#e8851a)":"rgba(255,255,255,0.04)", border:"none", borderRadius:"9px", padding:"8px 12px", cursor:input.trim()||attachedFile?"pointer":"default", color:input.trim()||attachedFile?"#000":"rgba(255,255,255,0.12)", flexShrink:0, display:"flex", transition:"all 0.15s" }}>
-                <Send size={15}/>
+                style={{ background: input.trim() || attachedFile ? "linear-gradient(135deg,#FF9933,#e8851a)" : "rgba(255,255,255,0.04)", border: "none", borderRadius: "9px", padding: "8px 12px", cursor: input.trim() || attachedFile ? "pointer" : "default", color: input.trim() || attachedFile ? "#000" : "rgba(255,255,255,0.12)", flexShrink: 0, display: "flex", transition: "all 0.15s" }}>
+                <Send size={15} />
               </button>
             </div>
-            <div style={{ textAlign:"center", marginTop:"5px" }}>
-              <p style={{ fontSize:"9px", color:"rgba(255,255,255,0.12)", letterSpacing:"0.06em" }}>
+            <div style={{ textAlign: "center", marginTop: "5px" }}>
+              <p style={{ fontSize: "9px", color: "rgba(255,255,255,0.12)", letterSpacing: "0.06em" }}>
                 📎 Image • PDF • Word • Excel • TXT • CSV &nbsp;|&nbsp; Developed by Himanshu Ranjan
               </p>
             </div>

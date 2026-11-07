@@ -6,6 +6,18 @@ import { getRedisClient } from "@/lib/redis";
 import { Groq } from "groq-sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+// Older Bharat AI deployments stored some keys under legacy names in Vercel
+// (NEXT_PUBLIC_* / GOOGLE_*). Accept those too so a rename in the dashboard
+// is not required for the app to find its keys.
+const envKey = (...names: string[]) => {
+  for (const n of names) {
+    const v = process.env[n]?.trim();
+    if (v) return v;
+  }
+  return undefined;
+};
+
+
 export async function GET() {
   const session = await getServerSession(authOptions);
 
@@ -89,7 +101,7 @@ export async function GET() {
   // Health checks with real server-side ping test
   let groqStatus = "Missing";
   let groqError: string | null = null;
-  const groqKey = process.env.GROQ_API_KEY?.trim();
+  const groqKey = envKey("GROQ_API_KEY", "GROQ_KEY", "NEXT_PUBLIC_GROQ_API_KEY");
   const groqModel = groqModelChain(process.env.GROQ_MODEL)[0];
   if (groqKey) {
     try {
@@ -108,22 +120,27 @@ export async function GET() {
 
   let geminiStatus = "Missing";
   let geminiError: string | null = null;
-  const geminiKey = process.env.GEMINI_API_KEY?.trim();
-  const geminiModel = geminiModelChain(process.env.GEMINI_MODEL)[0];
+  const geminiKey = envKey("GEMINI_API_KEY", "GOOGLE_GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "NEXT_PUBLIC_GEMINI_API_KEY");
+  const geminiModels = geminiModelChain(process.env.GEMINI_MODEL);
+  const geminiModel = geminiModels[0];
   if (geminiKey) {
-    try {
-      const genAI = new GoogleGenerativeAI(geminiKey);
-      const model = genAI.getGenerativeModel({ model: geminiModel });
-      await model.generateContent("ping");
-      geminiStatus = "OK";
-    } catch (e: any) {
-      geminiStatus = "Failing";
-      geminiError = e.message || "Gemini call failed";
+    geminiStatus = "Failing";
+    for (const m of geminiModels) {
+      try {
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const model = genAI.getGenerativeModel({ model: m });
+        await model.generateContent("ping");
+        geminiStatus = "OK";
+        geminiError = null;
+        break;
+      } catch (e: any) {
+        geminiError = (geminiError ? geminiError + " | " : "") + m + ": " + (e.message || "Gemini call failed");
+      }
     }
   }
 
-  const tavilyStatus = process.env.TAVILY_API_KEY?.trim() ? "OK" : "Missing";
-  const serperStatus = process.env.SERPER_API_KEY?.trim() ? "OK" : "Missing";
+  const tavilyStatus = envKey("TAVILY_API_KEY", "NEXT_PUBLIC_TAVILY_API_KEY") ? "OK" : "Missing";
+  const serperStatus = envKey("SERPER_API_KEY", "SERPER_KEY", "NEXT_PUBLIC_SERPER_API_KEY") ? "OK" : "Missing";
   const nextauthSecretStatus = process.env.NEXTAUTH_SECRET?.trim() ? "OK" : "Missing";
 
   return NextResponse.json({

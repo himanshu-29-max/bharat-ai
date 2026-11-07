@@ -3,6 +3,18 @@ import { Groq } from "groq-sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { groqModelChain, geminiModelChain } from "@/lib/models";
 
+// Older Bharat AI deployments stored some keys under legacy names in Vercel
+// (NEXT_PUBLIC_* / GOOGLE_*). Accept those too so a rename in the dashboard
+// is not required for the app to find its keys.
+const envKey = (...names: string[]) => {
+  for (const n of names) {
+    const v = process.env[n]?.trim();
+    if (v) return v;
+  }
+  return undefined;
+};
+
+
 // Explicit image generation intent (command + target)
 function isExplicitImagePrompt(text: string): boolean {
   const t = text.toLowerCase();
@@ -58,10 +70,10 @@ export async function POST(req: Request) {
       mode = "chat",
     } = await req.json();
 
-    const groqKey = process.env.GROQ_API_KEY?.trim();
+    const groqKey = envKey("GROQ_API_KEY", "GROQ_KEY", "NEXT_PUBLIC_GROQ_API_KEY");
     const groqModels = groqModelChain(process.env.GROQ_MODEL);
 
-    const geminiKey = process.env.GEMINI_API_KEY?.trim();
+    const geminiKey = envKey("GEMINI_API_KEY", "GOOGLE_GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "NEXT_PUBLIC_GEMINI_API_KEY");
     const geminiModels = geminiModelChain(process.env.GEMINI_MODEL);
 
     // Optional FREE alternative provider (OpenRouter) — third fallback, only if key set
@@ -69,8 +81,8 @@ export async function POST(req: Request) {
     const openrouterModel =
       process.env.OPENROUTER_MODEL?.trim() || "meta-llama/llama-3.3-70b-instruct:free";
 
-    const tavilyKey = process.env.TAVILY_API_KEY?.trim();
-    const serperKey = process.env.SERPER_API_KEY?.trim();
+    const tavilyKey = envKey("TAVILY_API_KEY", "NEXT_PUBLIC_TAVILY_API_KEY");
+    const serperKey = envKey("SERPER_API_KEY", "SERPER_KEY", "NEXT_PUBLIC_SERPER_API_KEY");
 
     const cleanMsg = (message || "").trim();
 

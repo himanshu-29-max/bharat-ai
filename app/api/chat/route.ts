@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { Groq } from "groq-sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { groqModelChain, geminiModelChain } from "@/lib/models";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/options";
+import {
+  getUserControls,
+  consumeImageQuota,
+  detectLanguage,
+} from "@/lib/permissions";
 
 // Older Bharat AI deployments stored some keys under legacy names in Vercel
 // (NEXT_PUBLIC_* / GOOGLE_*). Accept those too so a rename in the dashboard
@@ -13,6 +20,10 @@ const envKey = (...names: string[]) => {
   }
   return undefined;
 };
+
+// Feature/admin messages: English by default; Hinglish only when the user
+// is conversing in a non-English language (langInfo.local).
+const blockedMsg = (en: string, hi: string, local: boolean) => (local ? hi : en);
 
 
 // Explicit image generation intent (command + target)
@@ -70,6 +81,16 @@ export async function POST(req: Request) {
       mode = "chat",
     } = await req.json();
 
+    // Per-user state: admin controls (blocks/limits) + the user's own language.
+    const session = await getServerSession(authOptions).catch(() => null);
+    const userEmail = (session?.user?.email || "").toLowerCase();
+    const controls = userEmail
+      ? await getUserControls(userEmail)
+      : { blockedFeatures: [] as string[], imageDailyLimit: 0 };
+    const langInfo = detectLanguage(message, history);
+    const L = langInfo.local;
+    const bMsg = (en: string, hi: string) => blockedMsg(en, hi, L);
+
     const groqKey = envKey("GROQ_API_KEY", "GROQ_KEY", "NEXT_PUBLIC_GROQ_API_KEY");
     const groqModels = groqModelChain(process.env.GROQ_MODEL);
 
@@ -87,7 +108,7 @@ export async function POST(req: Request) {
     const cleanMsg = (message || "").trim();
 
     if (!cleanMsg && !imageBase64 && !fileBase64) {
-      return NextResponse.json({ reply: "Namaste! Kuch poochiye ya attach kijiye." });
+      return NextResponse.json({ reply: bMsg("Hello! Please ask a question or attach a file.", "Namaste! Kuch poochiye ya attach kijiye.") });
     }
 
     // -------------------------------------------------------------
@@ -99,6 +120,25 @@ export async function POST(req: Request) {
       (mode === "chat" && isExplicitImagePrompt(cleanMsg));
 
     if (shouldGenerateImage && cleanMsg) {
+      if (controls.blockedFeatures.includes("image")) {
+        return NextResponse.json({
+          reply: bMsg(
+            "Image generation is disabled for your account by the admin. Please contact the admin if you need it enabled.",
+            "Admin ne aapke account ke liye image generation band kiya hua hai. Chalu karwana ho to admin se sampark karein."
+          ),
+        });
+      }
+      if (userEmail) {
+        const quota = await consumeImageQuota(userEmail, controls.imageDailyLimit);
+        if (!quota.allowed) {
+          return NextResponse.json({
+            reply: bMsg(
+              `You have reached today's image generation limit (${controls.imageDailyLimit} images per day). Please try again tomorrow.`,
+              `Aaj ki image limit khatm ho gayi hai (${controls.imageDailyLimit} images per day). Kal phir try karein.`
+            ),
+          });
+        }
+      }
       const promptQuery = cleanMsg
         .replace(/^(image\s+banao|photo\s+banao|generate\s+image|draw|create\s+image|banao\s+image|banado)\s*:?/i, "")
         .trim();
@@ -179,10 +219,17 @@ export async function POST(req: Request) {
 
       const isShortInput = (promptQuery || cleanMsg).split(/\s+/).length <= 3;
       const note = isShortInput
-        ? "\n\n_Note: Ye AI-generated kalpanik image hai. Kisi asal vyakti ki asli photo ke liye 'Real Photo Dhundo' mode use karein._"
+        ? bMsg(
+            "\n\n_Note: This is an AI-generated fictional image. For a real photograph of an actual person, please use the 'Real Photo Dhundo' mode._",
+            "\n\n_Note: Ye AI-generated kalpanik image hai. Kisi asal vyakti ki asli photo ke liye 'Real Photo Dhundo' mode use karein._"
+          )
         : "";
+      const doneLine = bMsg(
+        "Your image has been generated:",
+        "Aapki image generate ho gayi hai:"
+      );
       return NextResponse.json({
-        reply: `Aapki image generate ho gayi hai:\n**Prompt:** "${finalPrompt}"${note}`,
+        reply: `${doneLine}\n**Prompt:** "${finalPrompt}"${note}`,
         generatedImage: imageUrl,
         imageSource: "generated",
       });
@@ -198,6 +245,14 @@ export async function POST(req: Request) {
       (mode === "chat" && isExplicitPhotoSearch(cleanMsg));
 
     if (shouldSearchRealPhoto) {
+      if (controls.blockedFeatures.includes("photo")) {
+        return NextResponse.json({
+          reply: bMsg(
+            "Real photo search is disabled for your account by the admin.",
+            "Admin ne aapke account ke liye real photo search band kiya hua hai."
+          ),
+        });
+      }
       const searchTarget =
         cleanMsg
           .replace(/(ki photo dikhao|ka photo dikhao|ki photo bhejo|ka photo bhejo|photo dikhao|photo bhejo|show me a real photo of|show photo of|real photo)/gi, "")
@@ -252,7 +307,10 @@ export async function POST(req: Request) {
 
       if (photoUrls.length > 0) {
         return NextResponse.json({
-          reply: `Yeh rahi **${searchTarget}** ki real photograph! (Google search se li gayi asli photo)`,
+          reply: bMsg(
+            `Here is a real photograph of **${searchTarget}**! (An actual photo from Google Search)`,
+            `Yeh rahi **${searchTarget}** ki real photograph! (Google search se li gayi asli photo)`
+          ),
           generatedImage: photoUrls[0],
           extraImages: photoUrls.slice(1),
           imageSource: "real",
@@ -269,6 +327,14 @@ export async function POST(req: Request) {
     const hasMediaAttachment = !!imageBase64 || !!fileBase64;
 
     if (hasMediaAttachment) {
+      if (controls.blockedFeatures.includes("analyze")) {
+        return NextResponse.json({
+          reply: bMsg(
+            "File analysis is disabled for your account by the admin.",
+            "Admin ne aapke account ke liye file analysis band kiya hua hai."
+          ),
+        });
+      }
       if (!geminiKey) {
         return NextResponse.json(
           {
@@ -284,7 +350,7 @@ export async function POST(req: Request) {
         const genAI = new GoogleGenerativeAI(geminiKey);
 
         const parts: any[] = [];
-        const questionPrompt = cleanMsg || "Kripya is document ya image ko dhyan se padh kar analyze karein aur iska mukhy vivaran dein.";
+        const questionPrompt = cleanMsg || "Please carefully read and analyze the attached document or image, and give its key summary.";
 
         if (imageBase64) {
           let base64Data = imageBase64;
@@ -353,10 +419,74 @@ export async function POST(req: Request) {
         return NextResponse.json({ reply: answer });
       } catch (err: any) {
         console.error("Gemini Analysis error:", err);
+
+        // Fallback: text files / text-extractable PDFs can still be answered by
+        // Groq or OpenRouter in the SAME language as the user.
+        const fbText =
+          !imageBase64 && fileBase64
+            ? (() => {
+                try {
+                  return Buffer.from(fileBase64, "base64").toString("utf-8").slice(0, 15000);
+                } catch {
+                  return "";
+                }
+              })()
+            : "";
+        const printable = fbText.replace(/[^\x20-\x7E\n\r\t]/g, "").trim();
+        if (printable.length > 200) {
+          const fbSystem = `You are Bharat AI, an intelligent Indian AI assistant built by Himanshu Ranjan.\n${langInfo.instruction}\nAnswer in clean Markdown with short paragraphs and bullets.`;
+          const fbPrompt = `Attached file content:\n${printable}\n\nUser question: ${cleanMsg || "Analyze this document and give its key summary."}`;
+          if (groqKey) {
+            try {
+              const g = new Groq({ apiKey: groqKey });
+              for (const m of groqModels) {
+                try {
+                  const cc = await g.chat.completions.create({
+                    model: m,
+                    max_tokens: 1200,
+                    temperature: 0.3,
+                    messages: [
+                      { role: "system", content: fbSystem },
+                      { role: "user", content: fbPrompt },
+                    ],
+                  });
+                  const txt = cc.choices?.[0]?.message?.content?.trim();
+                  if (txt) return NextResponse.json({ reply: txt });
+                } catch { /* next model */ }
+              }
+            } catch { /* fall through */ }
+          }
+          if (openrouterKey) {
+            try {
+              const oRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${openrouterKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: openrouterModel,
+                  max_tokens: 1200,
+                  temperature: 0.3,
+                  messages: [
+                    { role: "system", content: fbSystem },
+                    { role: "user", content: fbPrompt },
+                  ],
+                }),
+              });
+              const oData = await oRes.json();
+              const txt = oData?.choices?.[0]?.message?.content?.trim();
+              if (txt) return NextResponse.json({ reply: txt });
+            } catch { /* fall through */ }
+          }
+        }
+
         return NextResponse.json(
           {
-            reply:
-              "Analyze nahi ho paya — AI model service abhi available nahi hai. Thodi der baad phir try karo.",
+            reply: bMsg(
+              "Analysis could not be completed — the vision service (Gemini) is not responding right now. A fresh Gemini API key may be needed; please try again later.",
+              "Analyze nahi ho paya — vision service (Gemini) abhi jawab nahi de raha hai. Shayad nayi Gemini API key ki zaroorat hai; thodi der baad phir try karein."
+            ),
             error: err.message,
           },
           { status: 502 }
@@ -365,6 +495,15 @@ export async function POST(req: Request) {
     }
 
     // -------------------------------------------------------------
+    if (controls.blockedFeatures.includes("chat")) {
+      return NextResponse.json({
+        reply: bMsg(
+          "Chat is disabled for your account by the admin. Please contact the admin if you need it enabled.",
+          "Admin ne aapke account ke liye chat band kiya hua hai. Chalu karwana ho to admin se sampark karein."
+        ),
+      });
+    }
+
     // FEATURE 4: STANDARD CHAT (GROQ -> GEMINI FALLBACK CHAIN)
     // -------------------------------------------------------------
 
@@ -416,7 +555,8 @@ export async function POST(req: Request) {
     const systemPrompt = `You are Bharat AI (भारत AI), an intelligent Indian AI assistant built by Himanshu Ranjan.
 Current Date & Time: ${aajKiDate}.
 Answer the user accurately, comprehensively, and helpfully.
-Feel free to respond in natural Hinglish, Hindi, or English based on the user's inquiry.
+LANGUAGE: ${langInfo.instruction}
+DEFAULT LANGUAGE: English. Only switch when the user's own language clearly differs, as described above.
 Provide complete sentences without cutting off mid-way.
 
 REPLY FORMATTING (bahut zaroori — hamesha follow karo):
@@ -541,8 +681,10 @@ REPLY FORMATTING (bahut zaroori — hamesha follow karo):
       return NextResponse.json(
         {
           error: errorReason,
-          reply:
-            "Server se jawab nahi aaya — AI service abhi busy/down hai. Thodi der baad Retry dabakar phir try karo.",
+          reply: bMsg(
+            "No response from the server — the AI service is busy or down right now. Please press Retry and try again in a little while.",
+            "Server se jawab nahi aaya — AI service abhi busy/down hai. Thodi der baad Retry dabakar phir try karo."
+          ),
         },
         { status: 502 }
       );
@@ -554,7 +696,11 @@ REPLY FORMATTING (bahut zaroori — hamesha follow karo):
     return NextResponse.json(
       {
         error: err.message || "Unknown error",
-        reply: "Server me kuch gadbad ho gayi hai. Thodi der baad phir try karo.",
+        reply: blockedMsg(
+          "Something went wrong on the server. Please try again in a little while.",
+          "Server me kuch gadbad ho gayi hai. Thodi der baad phir try karo.",
+          false
+        ),
       },
       { status: 500 }
     );

@@ -21,6 +21,8 @@ export interface UserAccount {
     acceptedAt: string;
   };
   marketingOptIn?: boolean;
+  blockedFeatures?: string[];
+  imageDailyLimit?: number;
 }
 
 export const authOptions: NextAuthOptions = {

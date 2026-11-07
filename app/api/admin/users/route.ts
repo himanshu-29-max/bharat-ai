@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/options";
 import { getRedisClient, isUserAdmin } from "@/lib/redis";
+import { normalizeControls } from "@/lib/permissions";
 import { UserAccount } from "@/app/api/auth/options";
 
 // GET /api/admin/users
@@ -37,6 +38,8 @@ export async function GET() {
         consent: u?.consent || null,
         marketingOptIn: !!u?.marketingOptIn,
         chatCount: Array.isArray(chats) ? chats.length : 0,
+        blockedFeatures: normalizeControls(u).blockedFeatures,
+        imageDailyLimit: normalizeControls(u).imageDailyLimit,
       });
     }
 
@@ -64,7 +67,7 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { action, targetEmail, newRole } = body;
+    const { action, targetEmail, newRole, blockedFeatures, imageDailyLimit } = body;
 
     if (!targetEmail || typeof targetEmail !== "string") {
       return NextResponse.json({ error: "targetEmail zaroori hai" }, { status: 400 });
@@ -85,7 +88,20 @@ export async function POST(req: Request) {
       }
     }
 
-    if (action === "update-role") {
+    if (action === "set-controls") {
+      const userKey = `user-account:${email}`;
+      const existing = await redis.get<UserAccount>(userKey);
+      if (!existing) {
+        return NextResponse.json({ error: "User nahi mila" }, { status: 404 });
+      }
+      const controls = normalizeControls({ blockedFeatures, imageDailyLimit });
+      await redis.set(userKey, {
+        ...existing,
+        blockedFeatures: controls.blockedFeatures,
+        imageDailyLimit: controls.imageDailyLimit,
+      });
+      return NextResponse.json({ success: true, controls });
+    } else     if (action === "update-role") {
       if (newRole !== "user" && newRole !== "admin") {
         return NextResponse.json({ error: "Invalid role specified" }, { status: 400 });
       }

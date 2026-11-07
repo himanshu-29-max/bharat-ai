@@ -114,6 +114,51 @@ export default function AdminClient({ user }: AdminClientProps) {
     }
   };
 
+  const [expandedUser, setExpandedUser] = useState<string | null>(null);
+  const [draftBlocked, setDraftBlocked] = useState<string[]>([]);
+  const [draftLimit, setDraftLimit] = useState<number>(20);
+
+  const openControls = (u: any) => {
+    if (expandedUser === u.email) {
+      setExpandedUser(null);
+      return;
+    }
+    setExpandedUser(u.email);
+    setDraftBlocked(Array.isArray(u.blockedFeatures) ? u.blockedFeatures : []);
+    setDraftLimit(typeof u.imageDailyLimit === "number" ? u.imageDailyLimit : 20);
+  };
+
+  const toggleDraftFeature = (f: string) => {
+    setDraftBlocked((prev) =>
+      prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]
+    );
+  };
+
+  const handleSaveControls = async (targetEmail: string) => {
+    setActionLoading(targetEmail);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-controls",
+          targetEmail,
+          blockedFeatures: draftBlocked,
+          imageDailyLimit: draftLimit,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMessage({ type: "success", text: `${targetEmail} ke controls save ho gaye.` });
+      setExpandedUser(null);
+      fetchData();
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Controls save nahi hue." });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const getHealthBadge = (status?: string, detail?: string) => {
     if (status === "OK") {
       return (
@@ -360,7 +405,7 @@ export default function AdminClient({ user }: AdminClientProps) {
               <tbody className="divide-y divide-white/5">
                 {usersData.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-6 text-center text-white/30 text-xs">
+                    <td colSpan={8} className="py-6 text-center text-white/30 text-xs">
                       {statsData?.health?.redis !== "OK" ? "Redis is not connected. User records cannot be listed." : "No registered users found."}
                     </td>
                   </tr>
@@ -368,7 +413,8 @@ export default function AdminClient({ user }: AdminClientProps) {
                   usersData.map((u) => {
                     const isCurrent = u.email?.toLowerCase() === user.email?.toLowerCase();
                     return (
-                      <tr key={u.email} className="hover:bg-white/[0.02] transition-colors">
+                    <React.Fragment key={u.email}>
+                      <tr className="hover:bg-white/[0.02] transition-colors">
                         <td className="py-3 px-3">
                           <div className="font-medium text-white/90">{u.name}</div>
                           <div className="text-[11px] text-white/40">{u.email}</div>
@@ -417,6 +463,13 @@ export default function AdminClient({ user }: AdminClientProps) {
                               {u.role === "admin" ? "Make User" : "Make Admin"}
                             </button>
                             <button
+                              onClick={() => openControls(u)}
+                              title="Feature Controls — block/unblock features aur image limit"
+                              className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors text-[11px]"
+                            >
+                              Controls
+                            </button>
+                            <button
                               onClick={() => handleDeleteUser(u.email)}
                               disabled={actionLoading === u.email || isCurrent}
                               title={isCurrent ? "Aap khud ka account delete nahi kar sakte" : "Delete Account"}
@@ -427,6 +480,57 @@ export default function AdminClient({ user }: AdminClientProps) {
                           </div>
                         </td>
                       </tr>
+                      {expandedUser === u.email && (
+                        <tr className="bg-white/[0.03]">
+                          <td colSpan={8} className="py-4 px-4">
+                            <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">
+                              Feature Controls — {u.email}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-white/70">
+                              {[
+                                { key: "chat", label: "Chat band karo" },
+                                { key: "image", label: "Image Generation band karo" },
+                                { key: "analyze", label: "File Analyze band karo" },
+                                { key: "photo", label: "Real Photo band karo" },
+                              ].map((f) => (
+                                <label key={f.key} className="flex items-center gap-1.5 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={draftBlocked.includes(f.key)}
+                                    onChange={() => toggleDraftFeature(f.key)}
+                                    className="accent-rose-500"
+                                  />
+                                  {f.label}
+                                </label>
+                              ))}
+                              <label className="flex items-center gap-2">
+                                Roz ki image limit
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={draftLimit}
+                                  onChange={(e) =>
+                                    setDraftLimit(Math.max(0, parseInt(e.target.value || "0", 10) || 0))
+                                  }
+                                  className="w-20 bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-white"
+                                />
+                                <span className="text-white/35">(0 = unlimited)</span>
+                              </label>
+                              <button
+                                onClick={() => handleSaveControls(u.email)}
+                                disabled={actionLoading === u.email}
+                                className="px-3 py-1.5 rounded-lg bg-[#FF9933] text-black font-semibold hover:bg-[#FFAA4D] disabled:opacity-40 transition-colors"
+                              >
+                                Save Controls
+                              </button>
+                            </div>
+                            <div className="text-[11px] text-white/35 mt-2">
+                              Abhi ki sthiti: Blocked = {draftBlocked.length ? draftBlocked.join(", ") : "koi nahi"} • Limit = {draftLimit === 0 ? "unlimited" : `${draftLimit}/day`}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                     );
                   })
                 )}

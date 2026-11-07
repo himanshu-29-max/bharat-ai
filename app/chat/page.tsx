@@ -140,6 +140,8 @@ export default function ChatPage() {
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [attachAccept, setAttachAccept] = useState("image/*,.pdf,.txt,.md,.csv,.json");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const currentMessagesRef = useRef<Message[]>(messages);
   const currentChatIdRef = useRef<string>(currentChatId);
@@ -1147,20 +1149,51 @@ export default function ChatPage() {
 
             {/* Composer Card */}
             <div className="glass-card rounded-2xl p-2 sm:p-2.5 flex items-end gap-2 border border-white/10 shadow-2xl focus-within:border-[#FF9933]/50 transition-colors">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Attach Image, PDF or Text file"
-                className="p-2 text-white/40 hover:text-white rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"
-              >
-                <Plus size={18} />
-              </button>
+              <div className="relative flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowAttachMenu((v) => !v)}
+                  title="Attach a file — pehle type chunein"
+                  className="p-2 text-white/40 hover:text-white rounded-xl hover:bg-white/5 transition-colors"
+                >
+                  <Plus size={18} />
+                </button>
+                {showAttachMenu && (
+                  <div className="absolute bottom-12 left-0 z-30 glass-card border border-white/10 rounded-xl p-1.5 w-48 shadow-2xl">
+                    <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-white/35">
+                      Kis type ki file add karni hai?
+                    </div>
+                    {[
+                      { label: "🖼  Image (Photo)", accept: "image/*" },
+                      { label: "📄 PDF Document", accept: ".pdf" },
+                      { label: "📝 Text File", accept: ".txt,.md,.csv,.json" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => {
+                          setAttachAccept(opt.accept);
+                          setShowAttachMenu(false);
+                          // accept attribute update hone ke baad picker kholo
+                          setTimeout(() => fileInputRef.current?.click(), 60);
+                        }}
+                        className="w-full text-left px-2.5 py-2 rounded-lg text-sm text-white/80 hover:bg-white/10 transition-colors"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <input
                 type="file"
                 ref={fileInputRef}
-                onChange={handleFileSelect}
+                onChange={(e) => {
+                  handleFileSelect(e);
+                  setShowAttachMenu(false);
+                }}
                 className="hidden"
-                accept="image/*,.pdf,.txt,.md,.csv,.json"
+                accept={attachAccept}
               />
 
               <textarea

@@ -33,6 +33,7 @@ type Message = {
   image?: string;
   fileName?: string;
   generatedImage?: string;
+  extraImages?: string[];
   isError?: boolean;
   promptUsed?: string;
   timestamp?: number;
@@ -108,6 +109,8 @@ export default function ChatPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const currentMessagesRef = useRef<Message[]>(messages);
   const currentChatIdRef = useRef<string>(currentChatId);
+  const titlesRef = useRef<Record<string, string>>({});
+  const titleRequestedRef = useRef<Set<string>>(new Set());
 
   currentMessagesRef.current = messages;
   currentChatIdRef.current = currentChatId;
@@ -214,13 +217,46 @@ export default function ChatPage() {
     }
   }, [status, userEmail, loadHistoryList]);
 
+  // Fallback title until the smart (AI) title arrives: cleaned first message.
+  const fallbackTitle = (msgs: Message[]) => {
+    const raw = msgs.find((m) => m.role === "user")?.content || "";
+    const clean = raw.replace(/\s+/g, " ").trim();
+    if (!clean) return "Naya Chat";
+    const base = clean.length > 44 ? clean.slice(0, 44).trimEnd() + "\u2026" : clean;
+    const titled = base.charAt(0).toUpperCase() + base.slice(1);
+    return msgs.some((m) => m.generatedImage) ? "\u{1F5BC} " + titled : titled;
+  };
+
   // 5. IMMEDIATE Save with localStorage mirror + server sync + retry
   const saveChatImmediately = useCallback(
     async (msgs: Message[], chatId: string, retryCount = 0) => {
       if (!userEmail || msgs.length <= 1) return;
-      const firstUserMsg = msgs.find((m) => m.role === "user");
-      const title = firstUserMsg?.content?.slice(0, 40) || "Naya Chat";
+      const title = titlesRef.current[chatId] || fallbackTitle(msgs);
       const now = Date.now();
+
+      // One-time smart title (ChatGPT-style) once the first exchange exists.
+      if (
+        !titlesRef.current[chatId] &&
+        !titleRequestedRef.current.has(chatId) &&
+        msgs.length >= 2
+      ) {
+        titleRequestedRef.current.add(chatId);
+        const u = msgs.find((m) => m.role === "user")?.content || "";
+        const a = msgs.find((m) => m.role === "bot")?.content || "";
+        fetch("/api/chat-title", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user: u, assistant: a }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d?.title) {
+              titlesRef.current[chatId] = d.title;
+              saveChatImmediately(msgs, chatId);
+            }
+          })
+          .catch(() => {});
+      }
 
       // Mirror to localStorage instantly
       const localKey = getLocalKey(userEmail);
@@ -253,6 +289,7 @@ export default function ChatPage() {
           fileName: m.fileName,
           image: m.image && !m.image.startsWith("data:") ? m.image : undefined,
           generatedImage: m.generatedImage,
+          extraImages: m.extraImages,
         }));
 
         const res = await fetch("/api/history", {
@@ -286,7 +323,7 @@ export default function ChatPage() {
       const msgs = currentMessagesRef.current;
       const cId = currentChatIdRef.current;
       if (userEmail && msgs.length > 1) {
-        const title = msgs.find((m) => m.role === "user")?.content?.slice(0, 40) || "Naya Chat";
+        const title = titlesRef.current[cId] || fallbackTitle(msgs);
         const payload = JSON.stringify({
           chatId: cId,
           title,
@@ -295,6 +332,7 @@ export default function ChatPage() {
             content: m.content,
             fileName: m.fileName,
             generatedImage: m.generatedImage,
+          extraImages: m.extraImages,
           })),
         });
         try {
@@ -327,6 +365,7 @@ export default function ChatPage() {
 
   // Load chat by id (server first, with local fallback)
   const loadChat = async (chatId: string) => {
+    titleRequestedRef.current.add(chatId); // purani chats ke title na badlo
     try {
       const res = await fetch(`/api/history?chatId=${chatId}`);
       if (res.ok) {
@@ -512,6 +551,7 @@ export default function ChatPage() {
         role: "bot",
         content: data.reply || "",
         generatedImage: data.generatedImage,
+        extraImages: data.extraImages,
         promptUsed: targetMsg,
         timestamp: Date.now(),
       };
@@ -987,6 +1027,20 @@ export default function ChatPage() {
                           )}
                         </div>
                       </div>
+                    </div>
+                  )}
+                  {m.extraImages && m.extraImages.length > 0 && (
+                    <div className="mt-2 flex gap-2 flex-wrap">
+                      {m.extraImages.map((u, i) => (
+                        <a key={i} href={u} target="_blank" rel="noreferrer" title="Open full size">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={u}
+                            alt="aur photo"
+                            className="w-24 h-24 object-cover rounded-lg border border-white/10"
+                          />
+                        </a>
+                      ))}
                     </div>
                   )}
                 </div>

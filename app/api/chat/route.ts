@@ -103,13 +103,51 @@ export async function POST(req: Request) {
         .replace(/^(image\s+banao|photo\s+banao|generate\s+image|draw|create\s+image|banao\s+image|banado)\s*:?/i, "")
         .trim();
 
-      const seed = Math.floor(Math.random() * 1000000);
-      const encodedPrompt = encodeURIComponent(promptQuery || cleanMsg);
-      // Place nologo=true first in query string with nologo=1 & nofeed=true to ensure zero watermarks
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?nologo=true&nologo=1&nofeed=true&model=flux&width=1024&height=1024&seed=${seed}`;
+      // Prompt enhancement: chhote / Hinglish input ko detailed English prompt
+      // me badlo taaki image ki quality behtar ho. Fail ho to raw prompt chalega.
+      let finalPrompt = promptQuery || cleanMsg;
+      if (groqKey) {
+        try {
+          const enhancer = new Groq({ apiKey: groqKey });
+          for (const m of [...groqModels].reverse()) {
+            try {
+              const ec = await enhancer.chat.completions.create({
+                model: m,
+                max_tokens: 140,
+                temperature: 0.7,
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "You are an expert image-prompt writer for a text-to-image AI. Rewrite the user's request (any language) into ONE detailed English prompt: subject, appearance, clothing/setting, background, lighting, photorealistic style, ultra detailed. Max 60 words. If the request is only a person's name, describe a generic fictional portrait of an Indian person - never claim it depicts a real person. Output ONLY the prompt text.",
+                  },
+                  { role: "user", content: finalPrompt },
+                ],
+              });
+              const ep = ec.choices?.[0]?.message?.content?.trim();
+              if (ep && ep.length > 10) {
+                finalPrompt = ep;
+                break;
+              }
+            } catch {
+              /* next model */
+            }
+          }
+        } catch {
+          /* keep the raw prompt */
+        }
+      }
 
+      const seed = Math.floor(Math.random() * 1000000);
+      const encodedPrompt = encodeURIComponent(finalPrompt);
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?nologo=true&nologo=1&nofeed=true&private=true&model=flux&width=1024&height=1024&seed=${seed}`;
+
+      const isShortInput = (promptQuery || cleanMsg).split(/\s+/).length <= 3;
+      const note = isShortInput
+        ? "\n\n_Note: Ye AI-generated kalpanik image hai. Kisi asal vyakti ki asli photo ke liye 'Real Photo Dhundo' mode use karein._"
+        : "";
       return NextResponse.json({
-        reply: `Aapki image generate ho gayi hai:\n**Prompt:** "${promptQuery || cleanMsg}"`,
+        reply: `Aapki image generate ho gayi hai:\n**Prompt:** "${finalPrompt}"${note}`,
         generatedImage: imageUrl,
       });
     }
@@ -124,11 +162,14 @@ export async function POST(req: Request) {
       (mode === "chat" && isExplicitPhotoSearch(cleanMsg));
 
     if (shouldSearchRealPhoto) {
-      let photoUrl = "";
-      const searchTarget = cleanMsg
-        .replace(/(ki photo dikhao|ka photo dikhao|ki photo bhejo|ka photo bhejo|photo dikhao|photo bhejo|show me a real photo of|show photo of|real photo)/gi, "")
-        .trim() || cleanMsg;
+      const searchTarget =
+        cleanMsg
+          .replace(/(ki photo dikhao|ka photo dikhao|ki photo bhejo|ka photo bhejo|photo dikhao|photo bhejo|show me a real photo of|show photo of|real photo)/gi, "")
+          .trim() || cleanMsg;
 
+      const photoUrls: string[] = [];
+
+      // Source 1: Serper Google Images (Google Search ki asli photos)
       if (serperKey && searchTarget) {
         try {
           const sRes = await fetch("https://google.serper.dev/images", {
@@ -137,21 +178,47 @@ export async function POST(req: Request) {
               "X-API-KEY": serperKey,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ q: `${searchTarget} high resolution real photograph`, num: 3 }),
+            body: JSON.stringify({ q: searchTarget, num: 5 }),
           });
           const sData = await sRes.json();
-          if (sData.images?.[0]?.imageUrl) {
-            photoUrl = sData.images[0].imageUrl;
+          for (const im of sData.images || []) {
+            if (im?.imageUrl && !photoUrls.includes(im.imageUrl)) photoUrls.push(im.imageUrl);
+            if (photoUrls.length >= 3) break;
           }
         } catch (e: any) {
           console.error("Serper photo lookup error:", e);
         }
       }
 
-      if (photoUrl) {
+      // Source 2: Tavily images (backup)
+      if (photoUrls.length === 0 && tavilyKey && searchTarget) {
+        try {
+          const tRes = await fetch("https://api.tavily.com/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              api_key: tavilyKey,
+              query: searchTarget,
+              include_images: true,
+              max_results: 5,
+            }),
+          });
+          const tData = await tRes.json();
+          for (const im of tData.images || []) {
+            const u = typeof im === "string" ? im : im?.url;
+            if (u && !photoUrls.includes(u)) photoUrls.push(u);
+            if (photoUrls.length >= 3) break;
+          }
+        } catch (e: any) {
+          console.error("Tavily photo lookup error:", e);
+        }
+      }
+
+      if (photoUrls.length > 0) {
         return NextResponse.json({
-          reply: `Yeh rahi **${searchTarget}** ki real photograph!`,
-          generatedImage: photoUrl,
+          reply: `Yeh rahi **${searchTarget}** ki real photograph! (Google search se li gayi asli photo)`,
+          generatedImage: photoUrls[0],
+          extraImages: photoUrls.slice(1),
         });
       }
 

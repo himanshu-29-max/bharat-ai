@@ -23,6 +23,28 @@ export async function GET(req: Request) {
     const chatId = searchParams.get("chatId");
     const userKey = `user:${email}`;
 
+    // Ensure this user appears in the admin index even if the sign-in upsert
+    // never ran (e.g. a session created while Redis was unreachable). Without
+    // this, the admin dashboard shows 0 users / no activity for active users.
+    try {
+      await redis.sadd("admin:all-user-emails", email);
+      const acctKey = `user-account:${email}`;
+      const existingAcct: any = await redis.get(acctKey);
+      if (!existingAcct) {
+        await redis.set(acctKey, {
+          name: (session.user as any).name || email.split("@")[0],
+          email,
+          role: (session.user as any).role === "admin" ? "admin" : "user",
+          providers: [],
+          createdAt: Date.now(),
+          lastLoginAt: Date.now(),
+          marketingOptIn: false,
+        });
+      }
+    } catch (e) {
+      console.error("Admin index ensure failed:", e);
+    }
+
     if (chatId) {
       const messages = await redis.get<any[]>(`${userKey}:chat:${chatId}`);
       return NextResponse.json({ messages: Array.isArray(messages) ? messages : [] });
@@ -70,6 +92,7 @@ export async function POST(req: Request) {
       fileName: m.fileName || undefined,
       image: m.image && !m.image.startsWith("data:") ? m.image : undefined, // omit bulky data: URLs from long-term history
       generatedImage: m.generatedImage || undefined,
+      extraImages: Array.isArray(m.extraImages) ? m.extraImages.slice(0, 4) : undefined,
     }));
 
     // Store chat messages with 30-day expiration (2592000 seconds)
@@ -78,7 +101,7 @@ export async function POST(req: Request) {
     const existing: any[] = (await redis.get<any[]>(`${userKey}:chats`)) || [];
     const filtered = existing.filter((c: any) => c.id !== chatId);
     const updated = [
-      { id: chatId, title: (title || "Chat").slice(0, 50), updatedAt: Date.now() },
+      { id: chatId, title: (title || "Chat").slice(0, 80), updatedAt: Date.now() },
       ...filtered,
     ].slice(0, 50);
 

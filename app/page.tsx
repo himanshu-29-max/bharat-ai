@@ -1,352 +1,395 @@
 "use client";
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useSession, signOut } from "next-auth/react";
-import { Send, Plus, X, Sparkles, ImageIcon, FileText, Trash2, MessageSquare, LogOut, Menu, PenSquare } from "lucide-react";
-import ReactMarkdown from "react-markdown";
 
-type Message = { role: "user" | "bot"; content: string; image?: string; fileName?: string; generatedImage?: string };
-type Mode = "chat" | "imagine" | "analyze";
-type Chat = { id: string; title: string; updatedAt: number };
-type AttachedFile = { type: "image" | "pdf" | "text"; data: string; name: string; mime: string };
+import React from "react";
+import Link from "next/link";
+import { useSession } from "next-auth/react";
+import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
+import {
+  MessageSquare,
+  Sparkles,
+  Search,
+  FileText,
+  Image as ImageIcon,
+  History,
+  ShieldCheck,
+  Zap,
+  ArrowRight,
+  GraduationCap,
+  Layers,
+  ChevronDown
+} from "lucide-react";
 
-function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
-const WELCOME = "Namaste! 🙏 Kya poochna hai aaj?";
+export default function LandingPage() {
+  const { data: session } = useSession();
 
-async function readFile(file: File): Promise<AttachedFile> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    const isImage = file.type.startsWith("image/");
-    const isPDF = file.type === "application/pdf";
-    reader.onerror = reject;
-    // Images and PDFs → base64 via readAsDataURL
-    if (isImage || isPDF) {
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        const base64 = result.split(",")[1];
-        resolve({ type: isImage ? "image" : "pdf", data: base64, name: file.name, mime: file.type });
-      };
-      reader.readAsDataURL(file);
-    } else {
-      // Text files → plain text
-      reader.onloadend = () => resolve({ type: "text", data: reader.result as string, name: file.name, mime: file.type });
-      reader.readAsText(file);
-    }
-  });
-}
-
-export default function Home() {
-  const { data: session, status } = useSession();
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([{ role: "bot", content: WELCOME }]);
-  const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
-  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [mode, setMode] = useState<Mode>("chat");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string>(genId());
-  const [isMobile, setIsMobile] = useState(false);
-
-  const chatAreaRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const saveTimeout = useRef<any>(null);
-  const prevStatusRef = useRef<string>("");
-
-  useEffect(() => {
-    const check = () => { const m = window.innerWidth < 768; setIsMobile(m); if (m) setSidebarOpen(false); };
-    check(); window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
-
-  useEffect(() => {
-    if (chatAreaRef.current) chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
-  }, [messages, isLoading]);
-
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 120) + "px";
-    }
-  }, [input]);
-
-  useEffect(() => {
-    if (status === "authenticated" && prevStatusRef.current !== "authenticated") {
-      prevStatusRef.current = "authenticated";
-      fetch("/api/history").then(r => r.json()).then(d => { if (Array.isArray(d.chats)) setChats(d.chats); }).catch(console.error);
-    }
-    if (status !== "authenticated") prevStatusRef.current = status;
-  }, [status]);
-
-  const saveChat = useCallback(async (msgs: Message[], chatId: string) => {
-    if (status !== "authenticated" || msgs.length <= 1) return;
-    const title = msgs.find(m => m.role === "user")?.content?.slice(0, 40) || "Naya Chat";
-    try {
-      const saveMsgs = msgs.map(m => ({ role: m.role, content: m.content, fileName: m.fileName, generatedImage: m.generatedImage?.startsWith("http") ? m.generatedImage : undefined }));
-      await fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, title, messages: saveMsgs }) });
-      setChats(prev => [{ id: chatId, title, updatedAt: Date.now() }, ...prev.filter(c => c.id !== chatId)].slice(0, 50));
-    } catch (e) { console.error("Save failed:", e); }
-  }, [status]);
-
-  const loadChat = async (chatId: string) => {
-    try {
-      const res = await fetch(`/api/history?chatId=${chatId}`);
-      const data = await res.json();
-      if (Array.isArray(data.messages) && data.messages.length) {
-        setMessages(data.messages);
-        setHistory(data.messages.map((m: Message) => ({ role: m.role === "bot" ? "assistant" : "user", content: m.content })));
-        setCurrentChatId(chatId);
-      }
-      if (isMobile) setSidebarOpen(false);
-    } catch (e) { console.error("Load failed:", e); }
-  };
-
-  const deleteChat = async (e: React.MouseEvent, chatId: string) => {
-    e.stopPropagation();
-    await fetch("/api/history", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId }) });
-    setChats(prev => prev.filter(c => c.id !== chatId));
-    if (currentChatId === chatId) newChat();
-  };
-
-  const newChat = () => {
-    setCurrentChatId(genId()); setMessages([{ role: "bot", content: WELCOME }]);
-    setHistory([]); setInput(""); setAttachedFile(null);
-    if (isMobile) setSidebarOpen(false);
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 15 * 1024 * 1024) { alert("Max 15MB allowed!"); return; }
-    try {
-      const result = await readFile(file);
-      setAttachedFile(result);
-      setMode("analyze");
-    } catch { alert("File read nahi ho paya!"); }
-    e.target.value = "";
-  };
-
-  const handleSend = async () => {
-    if ((!input.trim() && !attachedFile) || isLoading) return;
-    const userMsg = input.trim();
-    const file = attachedFile;
-    const currentMode = mode;
-
-    const newMsg: Message = {
-      role: "user",
-      content: userMsg || `📎 ${file?.name}`,
-      image: file?.type === "image" ? `data:${file.mime};base64,${file.data}` : undefined,
-      fileName: (file?.type === "pdf" || file?.type === "text") ? file.name : undefined,
-    };
-    const newMessages = [...messages, newMsg];
-    setMessages(newMessages); setInput(""); setAttachedFile(null); setIsLoading(true);
-
-    try {
-      const body: any = { message: userMsg, history, mode: currentMode === "imagine" ? "imagine" : undefined };
-      if (file?.type === "image") body.imageBase64 = `data:${file.mime};base64,${file.data}`;
-      if (file?.type === "pdf") { body.fileBase64 = file.data; body.fileMime = "application/pdf"; }
-      if (file?.type === "text") {
-        // Encode text safely for JSON transport
-        try { body.fileBase64 = btoa(unescape(encodeURIComponent(file.data))); } catch { body.fileBase64 = btoa(file.data); }
-        body.fileMime = "text/plain";
-      }
-
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await res.json();
-      const botMsg: Message = { role: "bot", content: data.reply, generatedImage: data.generatedImage };
-      const finalMessages = [...newMessages, botMsg];
-      setMessages(finalMessages);
-      if (currentMode === "chat") setHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "assistant", content: data.reply }]);
-      clearTimeout(saveTimeout.current);
-      saveTimeout.current = setTimeout(() => saveChat(finalMessages, currentChatId), 1500);
-    } catch { setMessages(prev => [...prev, { role: "bot", content: "Network check karo bhai! 🙏" }]); }
-    finally { setTimeout(() => setIsLoading(false), 300); }
-  };
-
-  const modeConfig = {
-    chat: { label: "Chat", icon: <Sparkles size={13} />, placeholder: "Bharat AI se kuch bhi poochho..." },
-    imagine: { label: "Image Banao", icon: <ImageIcon size={13} />, placeholder: "Image describe karo — e.g. sunset over Taj Mahal" },
-    analyze: { label: "Analyze", icon: <FileText size={13} />, placeholder: "File upload karo ya seedha type karo..." },
-  };
-
-  const groupChats = (list: Chat[]) => {
-    const now = Date.now();
-    const g: Record<string, Chat[]> = { "Aaj": [], "Is Hafte": [], "Is Mahine": [], "Purane": [] };
-    list.forEach(c => { const d = (now - c.updatedAt) / 86400000; if (d < 1) g["Aaj"].push(c); else if (d < 7) g["Is Hafte"].push(c); else if (d < 30) g["Is Mahine"].push(c); else g["Purane"].push(c); });
-    return g;
-  };
-  const grouped = groupChats(chats);
+  const ctaUrl = session?.user ? "/chat" : "/signup";
 
   return (
-    <div style={{ display:"flex", height:"100vh", overflow:"hidden", background:"#0a0a0f", fontFamily:"'Segoe UI',system-ui,sans-serif", color:"#fff" }}>
-      {sidebarOpen && isMobile && <div onClick={() => setSidebarOpen(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:40 }}/>}
-
-      {/* SIDEBAR */}
-      <div style={{ width:"255px", flexShrink:0, display:"flex", flexDirection:"column", background:"rgba(255,255,255,0.015)", borderRight:"1px solid rgba(255,255,255,0.06)", transform:sidebarOpen?"translateX(0)":"translateX(-100%)", transition:"transform 0.25s ease", position:isMobile?"fixed":"relative", height:"100vh", zIndex:45 }}>
-        <div style={{ padding:"14px", borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"12px" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
-              <div style={{ display:"flex", flexDirection:"column", borderRadius:"3px", overflow:"hidden", width:"20px", height:"14px" }}>
-                <div style={{ flex:1, background:"#FF9933" }}/><div style={{ flex:1, background:"#fff" }}/><div style={{ flex:1, background:"#138808" }}/>
-              </div>
-              <span style={{ fontWeight:700, fontSize:"15px", background:"linear-gradient(90deg,#FF9933,#fff 50%,#138808)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>Bharat AI</span>
-            </div>
-            {isMobile && <button onClick={() => setSidebarOpen(false)} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.3)", cursor:"pointer" }}><X size={16}/></button>}
-          </div>
-          <button onClick={newChat} style={{ width:"100%", padding:"8px 12px", borderRadius:"10px", cursor:"pointer", background:"rgba(255,153,51,0.08)", border:"1px solid rgba(255,153,51,0.2)", color:"#FF9933", fontSize:"13px", fontWeight:600, display:"flex", alignItems:"center", gap:"7px" }}>
-            <PenSquare size={14}/> Naya Chat
-          </button>
-        </div>
-        <div style={{ flex:1, overflowY:"auto", padding:"6px 8px", scrollbarWidth:"none" }}>
-          {chats.length === 0 ? (
-            <div style={{ textAlign:"center", color:"rgba(255,255,255,0.18)", fontSize:"12px", padding:"32px 12px" }}>
-              <MessageSquare size={22} style={{ margin:"0 auto 8px", display:"block", opacity:0.3 }}/>Abhi koi chat nahi
-            </div>
-          ) : Object.entries(grouped).map(([group, list]) => list.length === 0 ? null : (
-            <div key={group}>
-              <div style={{ fontSize:"10px", color:"rgba(255,255,255,0.22)", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", padding:"10px 6px 4px" }}>{group}</div>
-              {list.map(chat => (
-                <div key={chat.id} onClick={() => loadChat(chat.id)} className="chat-item"
-                  style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"7px 8px", borderRadius:"8px", cursor:"pointer", marginBottom:"1px", background:currentChatId===chat.id?"rgba(255,153,51,0.08)":"transparent", border:currentChatId===chat.id?"1px solid rgba(255,153,51,0.18)":"1px solid transparent", transition:"all 0.15s" }}>
-                  <span style={{ fontSize:"12.5px", color:currentChatId===chat.id?"#FF9933":"rgba(255,255,255,0.55)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{chat.title}</span>
-                  <button onClick={e => deleteChat(e, chat.id)} className="delete-btn" style={{ background:"none", border:"none", cursor:"pointer", color:"rgba(255,255,255,0.2)", padding:"2px", flexShrink:0, opacity:0, transition:"opacity 0.15s" }}><Trash2 size={12}/></button>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-        {session?.user && (
-          <div style={{ padding:"10px 14px", borderTop:"1px solid rgba(255,255,255,0.05)", display:"flex", alignItems:"center", gap:"9px" }}>
-            {session.user.image && <img src={session.user.image} style={{ width:"30px", height:"30px", borderRadius:"50%", border:"1px solid rgba(255,255,255,0.1)" }} alt="avatar"/>}
-            <div style={{ flex:1, overflow:"hidden" }}>
-              <div style={{ fontSize:"12px", fontWeight:600, color:"rgba(255,255,255,0.75)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{session.user.name}</div>
-              <div style={{ fontSize:"10px", color:"rgba(255,255,255,0.28)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{session.user.email}</div>
-            </div>
-            <button onClick={() => signOut({ callbackUrl:"/login" })}
-              onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color="#ff4444"}
-              onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color="rgba(255,255,255,0.22)"}
-              style={{ background:"none", border:"none", cursor:"pointer", color:"rgba(255,255,255,0.22)", padding:"4px", borderRadius:"6px", transition:"color 0.15s" }}>
-              <LogOut size={14}/>
-            </button>
-          </div>
-        )}
+    <div className="min-h-screen flex flex-col bg-[#0a0a0f] text-white selection:bg-amber-500/30 selection:text-white relative">
+      {/* Ambient background glows */}
+      <div className="ambient-orbs">
+        <div className="ambient-orb-saffron" />
+        <div className="ambient-orb-green" />
       </div>
 
-      {/* MAIN */}
-      <main style={{ flex:1, display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", position:"relative", background:"linear-gradient(135deg,#0a0a0f 0%,#0d0a1a 50%,#0a0f0a 100%)" }}>
-        <div style={{ position:"absolute", top:"-20%", left:"10%", width:"500px", height:"500px", background:"radial-gradient(circle,rgba(255,153,51,0.05) 0%,transparent 70%)", borderRadius:"50%", filter:"blur(40px)", pointerEvents:"none", zIndex:0 }}/>
-        <div style={{ position:"absolute", bottom:"-20%", right:"5%", width:"400px", height:"400px", background:"radial-gradient(circle,rgba(19,136,8,0.05) 0%,transparent 70%)", borderRadius:"50%", filter:"blur(40px)", pointerEvents:"none", zIndex:0 }}/>
+      <Header />
 
-        <header style={{ flexShrink:0, padding:"11px 18px", display:"flex", alignItems:"center", gap:"10px", borderBottom:"1px solid rgba(255,255,255,0.05)", background:"rgba(10,10,15,0.85)", backdropFilter:"blur(20px)", zIndex:30 }}>
-          <button onClick={() => setSidebarOpen(!sidebarOpen)}
-            onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color="#fff"}
-            onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color="rgba(255,255,255,0.35)"}
-            style={{ background:"none", border:"none", color:"rgba(255,255,255,0.35)", cursor:"pointer", padding:"4px", borderRadius:"6px", display:"flex", transition:"color 0.15s" }}>
-            <Menu size={19}/>
-          </button>
-          <div style={{ fontSize:"15px", fontWeight:700, background:"linear-gradient(90deg,#FF9933,#fff 50%,#138808)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>Bharat AI</div>
-          <div style={{ flex:1 }}/>
-          <div style={{ display:"flex", alignItems:"center", gap:"5px", background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:"16px", padding:"4px 9px" }}>
-            <div style={{ width:"5px", height:"5px", borderRadius:"50%", background:"#22c55e", boxShadow:"0 0 4px #22c55e" }}/>
-            <span style={{ fontSize:"10px", color:"rgba(255,255,255,0.3)", letterSpacing:"0.08em" }}>ONLINE</span>
+      <main className="flex-1 relative z-10">
+        {/* HERO SECTION */}
+        <section className="relative pt-16 pb-20 md:pt-24 md:pb-28 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto text-center">
+          {/* Badge */}
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs sm:text-sm text-white/80 mb-6 backdrop-blur-md">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            Made for India 🇮🇳 &nbsp;|&nbsp; Fast, Honest & Multilingual
           </div>
-        </header>
 
-        <div ref={chatAreaRef} style={{ flex:1, overflowY:"auto", padding:"24px 16px 20px", scrollbarWidth:"none", position:"relative", zIndex:1 }}>
-          <div style={{ maxWidth:"700px", margin:"0 auto", display:"flex", flexDirection:"column", gap:"18px" }}>
-            {messages.map((m, i) => (
-              <div key={i} style={{ display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start", animation:"fadeIn 0.3s ease" }}>
-                {m.role==="bot" && <div style={{ width:"28px", height:"28px", borderRadius:"50%", flexShrink:0, background:"linear-gradient(135deg,#FF9933,#138808)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"12px", marginRight:"8px", marginTop:"3px", boxShadow:"0 0 8px rgba(255,153,51,0.2)" }}>🇮🇳</div>}
-                <div style={{ maxWidth:"78%" }}>
-                  {m.image && <img src={m.image} alt="upload" style={{ maxWidth:"220px", borderRadius:"12px", marginBottom:"6px", display:"block", marginLeft:"auto" }}/>}
-                  {m.fileName && (
-                    <div style={{ display:"flex", alignItems:"center", gap:"6px", background:"rgba(255,153,51,0.1)", border:"1px solid rgba(255,153,51,0.25)", borderRadius:"8px", padding:"6px 12px", marginBottom:"6px", marginLeft:"auto", width:"fit-content" }}>
-                      <FileText size={14} color="#FF9933"/>
-                      <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.fileName}</span>
-                    </div>
-                  )}
-                  <div style={{ padding:"11px 15px", borderRadius:m.role==="user"?"16px 16px 3px 16px":"16px 16px 16px 3px", background:m.role==="user"?"linear-gradient(135deg,#FF9933,#e8851a)":"rgba(255,255,255,0.04)", border:m.role==="bot"?"1px solid rgba(255,255,255,0.06)":"none", color:m.role==="user"?"#000":"rgba(255,255,255,0.87)", fontSize:"14px", lineHeight:"1.65", fontWeight:m.role==="user"?600:400, backdropFilter:m.role==="bot"?"blur(10px)":"none" }}>
-                    {m.role==="bot" ? <div className="prose prose-invert max-w-none" style={{ fontSize:"14px" }}><ReactMarkdown>{m.content}</ReactMarkdown></div> : <span>{m.content}</span>}
+          <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight max-w-4xl mx-auto leading-[1.15]">
+            India ka apna{" "}
+            <span className="tricolour-text block sm:inline">
+              All-in-One AI
+            </span>{" "}
+            Assistant
+          </h1>
+
+          <p className="mt-6 text-base sm:text-lg md:text-xl text-white/60 max-w-2xl mx-auto leading-relaxed">
+            Bharat AI speaks your language — Hindi, English, and Hinglish. Chat freely, generate realistic images, analyze PDFs and photos, and get verified real-time web information instantly.
+          </p>
+
+          {/* CTA Buttons */}
+          <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link
+              href={ctaUrl}
+              className="btn-primary w-full sm:w-auto text-base !py-3.5 !px-8 font-semibold shadow-lg shadow-[#FF9933]/20"
+            >
+              Start Chatting
+              <ArrowRight size={18} />
+            </Link>
+            <a
+              href="#features"
+              className="btn-ghost w-full sm:w-auto text-base !py-3.5 !px-7"
+            >
+              See Features
+            </a>
+          </div>
+
+          {/* Real Preview Mock glass card */}
+          <div className="mt-14 sm:mt-18 max-w-4xl mx-auto">
+            <div className="glass-card p-4 sm:p-6 border border-white/15 rounded-3xl shadow-2xl relative overflow-hidden text-left">
+              {/* Card top bar */}
+              <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-3 h-3 rounded-full bg-red-500/80" />
+                  <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                  <div className="w-3 h-3 rounded-full bg-green-500/80" />
+                  <span className="ml-2 text-xs text-white/40 font-mono">bharat-ai.chat</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Active Model: Groq / Gemini
+                </div>
+              </div>
+
+              {/* Chat preview bubbles */}
+              <div className="space-y-4 text-sm sm:text-base">
+                {/* User */}
+                <div className="flex justify-end">
+                  <div className="max-w-[85%] sm:max-w-[70%] bg-gradient-to-r from-[#FF9933] to-[#e8851a] text-black font-medium p-3 sm:p-4 rounded-2xl rounded-tr-sm shadow-md">
+                    Namaste! Mujhe batao Bharat AI kya kya kar sakta hai?
                   </div>
-                  {m.generatedImage && (
-                    <div style={{ marginTop:"8px" }}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={m.generatedImage} alt="generated"
-                        style={{ width:"100%", maxWidth:"420px", borderRadius:"12px", border:"1px solid rgba(255,255,255,0.07)", boxShadow:"0 6px 24px rgba(0,0,0,0.35)", display:"block" }}
-                        onError={e => { (e.target as HTMLImageElement).style.display="none"; }}
-                      />
-                      <a href={m.generatedImage} target="_blank" rel="noreferrer" download style={{ display:"inline-flex", alignItems:"center", gap:"4px", marginTop:"5px", padding:"4px 10px", borderRadius:"12px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", color:"rgba(255,255,255,0.35)", fontSize:"11px", textDecoration:"none" }}>⬇️ Download</a>
-                    </div>
-                  )}
                 </div>
-              </div>
-            ))}
-            {isLoading && (
-              <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
-                <div style={{ width:"28px", height:"28px", borderRadius:"50%", background:"linear-gradient(135deg,#FF9933,#138808)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"12px" }}>🇮🇳</div>
-                <div style={{ display:"flex", gap:"4px" }}>
-                  {[0,1,2].map(i => <div key={i} style={{ width:"6px", height:"6px", borderRadius:"50%", background:i===0?"#FF9933":i===1?"#fff":"#138808", animation:`bounce 0.9s ease ${i*0.15}s infinite` }}/>)}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
 
-        <div style={{ flexShrink:0, padding:"10px 16px 16px", background:"linear-gradient(to top,#0a0a0f 80%,transparent)", zIndex:10 }}>
-          <div style={{ maxWidth:"700px", margin:"0 auto" }}>
-            <div style={{ display:"flex", gap:"6px", marginBottom:"7px", justifyContent:"center" }}>
-              {(Object.keys(modeConfig) as Mode[]).map(m => (
-                <button key={m} onClick={() => setMode(m)} style={{ display:"flex", alignItems:"center", gap:"4px", padding:"4px 11px", borderRadius:"16px", fontSize:"11.5px", fontWeight:600, cursor:"pointer", transition:"all 0.15s", background:mode===m?"rgba(255,153,51,0.1)":"rgba(255,255,255,0.03)", border:mode===m?"1px solid rgba(255,153,51,0.3)":"1px solid rgba(255,255,255,0.06)", color:mode===m?"#FF9933":"rgba(255,255,255,0.28)" }}>
-                  {modeConfig[m].icon}{modeConfig[m].label}
-                </button>
-              ))}
-            </div>
-            {attachedFile && (
-              <div style={{ marginBottom:"7px", display:"inline-flex", alignItems:"center", gap:"7px", padding:"5px 10px", background:"rgba(255,153,51,0.08)", border:"1px solid rgba(255,153,51,0.2)", borderRadius:"10px" }}>
-                {attachedFile.type === "image"
-                  ? <img src={`data:${attachedFile.mime};base64,${attachedFile.data}`} style={{ width:"32px", height:"32px", borderRadius:"5px", objectFit:"cover" }} alt="preview"/>
-                  : <FileText size={15} color="#FF9933"/>}
-                <span style={{ fontSize:"12px", color:"#FF9933", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{attachedFile.name}</span>
-                <button onClick={() => setAttachedFile(null)} style={{ background:"none", border:"none", cursor:"pointer", color:"#ff3b30", fontSize:"16px", lineHeight:1 }}>×</button>
+                {/* Bot */}
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF9933] to-[#138808] flex items-center justify-center text-xs flex-shrink-0 shadow-md">
+                    🇮🇳
+                  </div>
+                  <div className="max-w-[85%] sm:max-w-[80%] bg-white/[0.05] border border-white/10 p-3.5 sm:p-4 rounded-2xl rounded-tl-sm text-white/90 leading-relaxed">
+                    <p className="font-semibold text-[#FF9933] mb-1">Namaste! 🙏 Bharat AI aapka smart desi saathi hai:</p>
+                    <ul className="text-xs sm:text-sm text-white/70 space-y-1 list-disc list-inside">
+                      <li>Hinglish me fluent chat aur coding help</li>
+                      <li>Pollinations Flux se creative <strong>AI Image Generation</strong></li>
+                      <li>JPG, PNG aur <strong>PDF documents ka live analysis</strong> via Gemini</li>
+                      <li>Tavily se live web search jab latest news chahiye ho</li>
+                    </ul>
+                  </div>
+                </div>
               </div>
-            )}
-            <div style={{ display:"flex", alignItems:"flex-end", gap:"7px", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"16px", padding:"7px 7px 7px 13px", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", backdropFilter:"blur(20px)" }}>
-              <button onClick={() => fileInputRef.current?.click()} title="Image, PDF, Word, Excel, TXT..."
-                style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:"9px", padding:"6px", cursor:"pointer", color:"rgba(255,255,255,0.4)", flexShrink:0, display:"flex" }}>
-                <Plus size={15}/>
-              </button>
-              <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display:"none" }}
-                accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.json,.md"/>
-              <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();handleSend();}}}
-                placeholder={modeConfig[mode].placeholder} rows={1}
-                style={{ flex:1, background:"transparent", border:"none", outline:"none", color:"rgba(255,255,255,0.87)", fontSize:"14px", lineHeight:"1.5", resize:"none", fontFamily:"inherit", padding:"4px 0" }}/>
-              <button onClick={handleSend} disabled={isLoading}
-                style={{ background:input.trim()||attachedFile?"linear-gradient(135deg,#FF9933,#e8851a)":"rgba(255,255,255,0.04)", border:"none", borderRadius:"9px", padding:"8px 12px", cursor:input.trim()||attachedFile?"pointer":"default", color:input.trim()||attachedFile?"#000":"rgba(255,255,255,0.12)", flexShrink:0, display:"flex", transition:"all 0.15s" }}>
-                <Send size={15}/>
-              </button>
             </div>
-            <div style={{ textAlign:"center", marginTop:"5px" }}>
-              <p style={{ fontSize:"9px", color:"rgba(255,255,255,0.12)", letterSpacing:"0.06em" }}>
-                📎 Image • PDF • Word • Excel • TXT • CSV &nbsp;|&nbsp; Developed by Himanshu Ranjan
+          </div>
+        </section>
+
+        {/* ABOUT SECTION */}
+        <section id="about" className="py-16 md:py-24 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto border-t border-white/5">
+          <div className="glass-card p-6 sm:p-10 md:p-12 relative overflow-hidden">
+            <div className="max-w-3xl">
+              <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#FF9933] mb-3">
+                <GraduationCap size={15} />
+                Student Innovation & Engineering
+              </div>
+              <h2 className="text-2xl sm:text-4xl font-bold tracking-tight mb-4">
+                About Bharat AI
+              </h2>
+              <p className="text-white/70 text-sm sm:text-base leading-relaxed mb-4">
+                Bharat AI is an ambitious, full-stack artificial intelligence platform built by{" "}
+                <strong className="text-white font-semibold">Himanshu Ranjan</strong>, a Computer Science and Engineering (B.Tech CSE) student at{" "}
+                <strong className="text-white font-semibold">Sandip University</strong>.
+              </p>
+              <p className="text-white/60 text-sm sm:text-base leading-relaxed mb-6">
+                Most international AI chatbots struggle with genuine Indian context, dialect nuances, and multilingual queries (Hindi, Hinglish, regional tech queries). Bharat AI was engineered to bridge this gap by bringing together low-latency cloud models (Groq LLaMA, Google Gemini 1.5/2.5), multimodal PDF/image inspection, real-time search indexing, and resilient serverless persistence under one elegant experience.
+              </p>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-4 border-t border-white/10 text-xs sm:text-sm">
+                <div>
+                  <div className="text-white/40">Creator</div>
+                  <div className="font-semibold text-white mt-0.5">Himanshu Ranjan</div>
+                </div>
+                <div>
+                  <div className="text-white/40">Institution</div>
+                  <div className="font-semibold text-white mt-0.5">Sandip University</div>
+                </div>
+                <div>
+                  <div className="text-white/40">Discipline</div>
+                  <div className="font-semibold text-white mt-0.5">B.Tech CSE</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* FEATURES GRID */}
+        <section id="features" className="py-16 md:py-24 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+          <div className="text-center max-w-3xl mx-auto mb-14">
+            <h2 className="text-xs font-semibold text-[#FF9933] uppercase tracking-wider mb-2">
+              Genuine Capabilities
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold tracking-tight">
+              Real Features. No Fake Replies.
+            </p>
+            <p className="text-white/50 text-sm sm:text-base mt-3">
+              Every card below represents a tested, production-ready capability wired into our live backend API.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {/* Card 1 */}
+            <div className="glass-card p-6 flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-orange-500/10 border border-orange-500/20 text-[#FF9933] flex items-center justify-center mb-4">
+                  <MessageSquare size={20} />
+                </div>
+                <h3 className="text-lg font-bold mb-2">Hinglish-Friendly AI Chat</h3>
+                <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                  Dual-provider intelligence using Groq and Gemini. Ask questions in pure Hindi, fluent English, or conversational Hinglish with complete answers.
+                </p>
+              </div>
+              <div className="mt-5 text-xs text-orange-400 font-medium">Groq LLaMA + Google Gemini</div>
+            </div>
+
+            {/* Card 2 */}
+            <div className="glass-card p-6 flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-4">
+                  <Sparkles size={20} />
+                </div>
+                <h3 className="text-lg font-bold mb-2">AI Image Generation</h3>
+                <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                  Generate brand-new artworks and photorealistic concepts directly from your text prompt using Pollinations Flux, with one-click direct download.
+                </p>
+              </div>
+              <div className="mt-5 text-xs text-purple-400 font-medium">Pollinations.ai Flux Engine</div>
+            </div>
+
+            {/* Card 3 */}
+            <div className="glass-card p-6 flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center mb-4">
+                  <FileText size={20} />
+                </div>
+                <h3 className="text-lg font-bold mb-2">Image, PDF & Text Analysis</h3>
+                <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                  Upload JPG, PNG, or multi-page PDF documents. Gemini Vision and Document comprehension inspects the actual file content to answer your questions accurately.
+                </p>
+              </div>
+              <div className="mt-5 text-xs text-blue-400 font-medium">Gemini 1.5/2.5 Multimodal Vision</div>
+            </div>
+
+            {/* Card 4 */}
+            <div className="glass-card p-6 flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mb-4">
+                  <Search size={20} />
+                </div>
+                <h3 className="text-lg font-bold mb-2">Smart Real-Time Web Search</h3>
+                <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                  Queries requiring current affairs, today&apos;s events, or live scores trigger Tavily Search automatically to ground the answer in facts.
+                </p>
+              </div>
+              <div className="mt-5 text-xs text-emerald-400 font-medium">Tavily Search API</div>
+            </div>
+
+            {/* Card 5 */}
+            <div className="glass-card p-6 flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-4">
+                  <History size={20} />
+                </div>
+                <h3 className="text-lg font-bold mb-2">Saved Cloud Chat History</h3>
+                <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                  Conversations are saved to Upstash Redis and organized intelligently into <em>Aaj</em>, <em>Is Hafte</em>, <em>Is Mahine</em>, and <em>Purane</em>.
+                </p>
+              </div>
+              <div className="mt-5 text-xs text-amber-400 font-medium">Upstash Serverless Redis</div>
+            </div>
+
+            {/* Card 6 */}
+            <div className="glass-card p-6 flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mb-4">
+                  <ShieldCheck size={20} />
+                </div>
+                <h3 className="text-lg font-bold mb-2">Google + Email/Password Auth</h3>
+                <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                  Instant One-Click Google OAuth or private Email/Password sign up with salted bcrypt hash encryption and role-based access control.
+                </p>
+              </div>
+              <div className="mt-5 text-xs text-rose-400 font-medium">NextAuth v4 + Bcrypt</div>
+            </div>
+          </div>
+        </section>
+
+        {/* HOW IT WORKS */}
+        <section id="how-it-works" className="py-16 md:py-24 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto border-t border-white/5">
+          <div className="text-center max-w-2xl mx-auto mb-14">
+            <h2 className="text-xs font-semibold text-[#138808] uppercase tracking-wider mb-2">
+              Simple Flow
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold tracking-tight">
+              Kaise Kaam Karta Hai?
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="glass-card p-6 relative">
+              <div className="text-3xl font-black text-[#FF9933] mb-3">01</div>
+              <h3 className="text-lg font-bold mb-2">Sign Up Ya Login Karein</h3>
+              <p className="text-sm text-white/60 leading-relaxed">
+                Google account se ek click me login karein ya apna email aur password daal kar naya account banayein.
+              </p>
+            </div>
+
+            <div className="glass-card p-6 relative">
+              <div className="text-3xl font-black text-white mb-3">02</div>
+              <h3 className="text-lg font-bold mb-2">Poochhein, Upload Karein ya Imagine Karein</h3>
+              <p className="text-sm text-white/60 leading-relaxed">
+                Chat box me sawaal likhein, koi PDF ya photo attach karein, ya &quot;Image Banao&quot; mode select karke kuch bhi imagine karein.
+              </p>
+            </div>
+
+            <div className="glass-card p-6 relative">
+              <div className="text-3xl font-black text-[#138808] mb-3">03</div>
+              <h3 className="text-lg font-bold mb-2">Turant Jawab &amp; Auto-Save</h3>
+              <p className="text-sm text-white/60 leading-relaxed">
+                Bharat AI high-speed answer ya HD image generate karta hai aur aapka pura conversation history me surakshit save ho jata hai.
               </p>
             </div>
           </div>
-        </div>
+        </section>
+
+        {/* TECH STACK STRIP */}
+        <section id="tech" className="py-14 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto border-t border-white/5">
+          <p className="text-center text-xs font-semibold text-white/40 uppercase tracking-widest mb-8">
+            Powered by Modern Frontier Technology
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-6 sm:gap-10 text-white/70">
+            <div className="glass px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2">
+              <Layers size={16} className="text-[#FF9933]" /> Next.js 14 App Router
+            </div>
+            <div className="glass px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2">
+              <Zap size={16} className="text-amber-400" /> Groq LPU Inference
+            </div>
+            <div className="glass px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2">
+              <Sparkles size={16} className="text-blue-400" /> Google Gemini Multimodal
+            </div>
+            <div className="glass px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2">
+              <History size={16} className="text-red-400" /> Upstash Serverless Redis
+            </div>
+            <div className="glass px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2">
+              <ShieldCheck size={16} className="text-emerald-400" /> NextAuth &amp; Vercel
+            </div>
+          </div>
+        </section>
+
+        {/* FAQ SECTION */}
+        <section id="faq" className="py-16 md:py-24 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto border-t border-white/5">
+          <div className="text-center mb-12">
+            <h2 className="text-xs font-semibold text-[#FF9933] uppercase tracking-wider mb-2">
+              Frequently Asked Questions
+            </h2>
+            <p className="text-3xl font-bold tracking-tight">Sawaal aur Jawab</p>
+          </div>
+
+          <div className="space-y-4">
+            <div className="glass-card p-5 sm:p-6">
+              <h3 className="font-semibold text-base sm:text-lg mb-2 text-white">
+                Kya Bharat AI free hai?
+              </h3>
+              <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                Haan! Bharat AI bilkul muft (free) hai. Aap bina kisi subscription ya payment ke chat kar sakte hain, images generate kar sakte hain aur documents analyze kar sakte hain.
+              </p>
+            </div>
+
+            <div className="glass-card p-5 sm:p-6">
+              <h3 className="font-semibold text-base sm:text-lg mb-2 text-white">
+                Kaun si bhashaon (languages) me baat kar sakte hain?
+              </h3>
+              <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                Aap Hindi (Devanagari), Hinglish (Roman English me Hindi), aur English me asaani se sawal poochh sakte hain. Model aapke format aur tone ko samajh kar jawab deta hai.
+              </p>
+            </div>
+
+            <div className="glass-card p-5 sm:p-6">
+              <h3 className="font-semibold text-base sm:text-lg mb-2 text-white">
+                Kya meri chat history save rehti hai?
+              </h3>
+              <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                Haan. Jab aap login karke chat karte hain, aapke sabhi conversations Upstash cloud Redis me save hote hain. Aap unhe kisi bhi waqt sidebar se dobara khol ya delete kar sakte hain.
+              </p>
+            </div>
+
+            <div className="glass-card p-5 sm:p-6">
+              <h3 className="font-semibold text-base sm:text-lg mb-2 text-white">
+                Bharat AI kisne banaya hai?
+              </h3>
+              <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
+                Bharat AI ko Himanshu Ranjan ne develop kiya hai, jo Sandip University ke B.Tech Computer Science and Engineering (CSE) ke vidyarthi hain.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* FINAL CTA BANNER */}
+        <section className="py-16 md:py-24 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+          <div className="glass-card p-8 sm:p-14 text-center relative overflow-hidden border border-[#FF9933]/30">
+            <h2 className="text-3xl sm:text-5xl font-extrabold tracking-tight mb-4">
+              Bharat AI ka anubhav karein
+            </h2>
+            <p className="text-white/70 max-w-xl mx-auto text-sm sm:text-base mb-8">
+              Fastest responses, multimodal vision, real-time web search aur AI image creation — sab kuch ek hi jagah.
+            </p>
+            <Link
+              href={ctaUrl}
+              className="btn-primary text-base !py-3.5 !px-9 font-semibold shadow-xl shadow-[#FF9933]/25"
+            >
+              Start Now — It&apos;s Free
+              <ArrowRight size={18} />
+            </Link>
+          </div>
+        </section>
       </main>
 
-      <style>{`
-        @keyframes fadeIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
-        @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-        ::-webkit-scrollbar{display:none}
-        .chat-item:hover{background:rgba(255,255,255,0.04) !important}
-        .chat-item:hover .delete-btn{opacity:1 !important}
-        .prose p{margin:0.3em 0}.prose ul,.prose ol{margin:0.3em 0;padding-left:1.2em}
-        .prose code{background:rgba(255,255,255,0.08);padding:2px 5px;border-radius:3px;font-size:12px}
-        .prose pre{background:rgba(0,0,0,0.3);padding:10px;border-radius:8px;overflow-x:auto}
-        .prose strong{color:#FF9933}.prose a{color:#60a5fa}
-        textarea::placeholder{color:rgba(255,255,255,0.17)}
-      `}</style>
+      <Footer />
     </div>
   );
 }
+

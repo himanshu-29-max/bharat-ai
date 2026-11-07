@@ -19,7 +19,11 @@ import {
   Shield,
   Search,
   ExternalLink,
-  ChevronRight
+  Copy,
+  Check,
+  RotateCcw,
+  AlertCircle,
+  HelpCircle
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
@@ -29,6 +33,9 @@ type Message = {
   image?: string;
   fileName?: string;
   generatedImage?: string;
+  isError?: boolean;
+  promptUsed?: string;
+  timestamp?: number;
 };
 
 type Mode = "chat" | "imagine" | "search_photo" | "analyze";
@@ -39,7 +46,14 @@ function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
-const WELCOME = "Namaste! 🙏 Main Bharat AI hoon. Aaj kya poochhna ya banana chahte hain?";
+const WELCOME = "Namaste! 🙏 Main Bharat AI hoon. Aaj kis baare me baat karni hai ya image banani hai?";
+
+const SUGGESTIONS = [
+  { text: "Taj Mahal ke baare me batao", mode: "chat" as Mode, icon: "🏛️" },
+  { text: "Ek cute cat astronaut floating in space", mode: "imagine" as Mode, icon: "🎨" },
+  { text: "Photosynthesis aasan bhasha me samjhao", mode: "chat" as Mode, icon: "🌱" },
+  { text: "Aaj ki badi taaza khabrein kya hain?", mode: "chat" as Mode, icon: "📰" },
+];
 
 async function readFile(file: File): Promise<AttachedFile> {
   return new Promise((resolve, reject) => {
@@ -76,24 +90,38 @@ async function readFile(file: File): Promise<AttachedFile> {
 export default function ChatPage() {
   const { data: session, status } = useSession();
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([{ role: "bot", content: WELCOME }]);
+  const [messages, setMessages] = useState<Message[]>([{ role: "bot", content: WELCOME, timestamp: Date.now() }]);
   const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
   const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<Mode>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
+  const [chatSearch, setChatSearch] = useState("");
   const [currentChatId, setCurrentChatId] = useState<string>(genId());
   const [isMobile, setIsMobile] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [serverErrorBanner, setServerErrorBanner] = useState<string | null>(null);
 
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const saveTimeout = useRef<any>(null);
-  const prevStatusRef = useRef<string>("");
+  const currentMessagesRef = useRef<Message[]>(messages);
+  const currentChatIdRef = useRef<string>(currentChatId);
 
-  const isAdmin = (session?.user as any)?.role === "admin";
+  currentMessagesRef.current = messages;
+  currentChatIdRef.current = currentChatId;
 
+  const userEmail = session?.user?.email?.toLowerCase();
+  const role = (session?.user as any)?.role || "user";
+  const isAdmin = role === "admin";
+
+  // Helper for localStorage keys
+  const getLocalKey = useCallback((email?: string) => {
+    return email ? `bharat-ai:history:${email}` : null;
+  }, []);
+
+  // 1. Initial responsive check
   useEffect(() => {
     const check = () => {
       const m = window.innerWidth < 768;
@@ -105,96 +133,274 @@ export default function ChatPage() {
     return () => window.removeEventListener("resize", check);
   }, []);
 
+  // 2. Auto scroll to bottom
   useEffect(() => {
     if (chatAreaRef.current) {
       chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
     }
   }, [messages, isLoading]);
 
+  // 3. Auto resize input textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 120) + "px";
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + "px";
     }
   }, [input]);
 
-  useEffect(() => {
-    if (status === "authenticated" && prevStatusRef.current !== "authenticated") {
-      prevStatusRef.current = "authenticated";
-      fetch("/api/history")
-        .then((r) => r.json())
-        .then((d) => {
-          if (Array.isArray(d.chats)) setChats(d.chats);
-        })
-        .catch(console.error);
-    }
-    if (status !== "authenticated") prevStatusRef.current = status;
-  }, [status]);
+  // 4. Load history from server + fallback to localStorage merge
+  const loadHistoryList = useCallback(async (email: string) => {
+    setServerErrorBanner(null);
+    let serverChats: Chat[] = [];
+    let serverFailed = false;
 
-  const saveChat = useCallback(
-    async (msgs: Message[], chatId: string) => {
-      if (status !== "authenticated" || msgs.length <= 1) return;
-      const title = msgs.find((m) => m.role === "user")?.content?.slice(0, 40) || "Naya Chat";
+    try {
+      const res = await fetch("/api/history");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.chats)) {
+          serverChats = data.chats;
+        }
+      } else {
+        serverFailed = true;
+        const errData = await res.json().catch(() => ({}));
+        setServerErrorBanner(`History server se load nahi ho saki: ${errData.error || `HTTP ${res.status}`}`);
+      }
+    } catch (e: any) {
+      serverFailed = true;
+      setServerErrorBanner(`History load error: ${e.message || "Network issue"}`);
+    }
+
+    // Load local storage backup
+    const localKey = getLocalKey(email);
+    let localChats: Chat[] = [];
+    if (localKey && typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem(localKey);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed.chats)) localChats = parsed.chats;
+        }
+      } catch (e) {
+        console.warn("Failed to parse local history cache:", e);
+      }
+    }
+
+    // Merge: union by id with newest updatedAt
+    const chatMap = new Map<string, Chat>();
+    for (const c of localChats) {
+      if (c?.id) chatMap.set(c.id, c);
+    }
+    for (const c of serverChats) {
+      if (c?.id) {
+        const existing = chatMap.get(c.id);
+        if (!existing || (c.updatedAt || 0) >= (existing.updatedAt || 0)) {
+          chatMap.set(c.id, c);
+        }
+      }
+    }
+
+    const mergedList = Array.from(chatMap.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    setChats(mergedList);
+
+    if (serverFailed && localChats.length > 0) {
+      setServerErrorBanner("Database connection temporarily unavailable — local backup se history load ki gayi hai.");
+    }
+  }, [getLocalKey]);
+
+  useEffect(() => {
+    if (status === "authenticated" && userEmail) {
+      loadHistoryList(userEmail);
+    }
+  }, [status, userEmail, loadHistoryList]);
+
+  // 5. IMMEDIATE Save with localStorage mirror + server sync + retry
+  const saveChatImmediately = useCallback(
+    async (msgs: Message[], chatId: string, retryCount = 0) => {
+      if (!userEmail || msgs.length <= 1) return;
+      const firstUserMsg = msgs.find((m) => m.role === "user");
+      const title = firstUserMsg?.content?.slice(0, 40) || "Naya Chat";
+      const now = Date.now();
+
+      // Mirror to localStorage instantly
+      const localKey = getLocalKey(userEmail);
+      if (localKey && typeof window !== "undefined") {
+        try {
+          const saved = localStorage.getItem(localKey);
+          let localData: { chats: Chat[]; messagesByChat: Record<string, Message[]> } = saved
+            ? JSON.parse(saved)
+            : { chats: [], messagesByChat: {} };
+
+          const filtered = (localData.chats || []).filter((c) => c.id !== chatId);
+          const updatedChats = [{ id: chatId, title, updatedAt: now }, ...filtered].slice(0, 50);
+
+          localData.chats = updatedChats;
+          if (!localData.messagesByChat) localData.messagesByChat = {};
+          localData.messagesByChat[chatId] = msgs;
+
+          localStorage.setItem(localKey, JSON.stringify(localData));
+          setChats(updatedChats);
+        } catch (e) {
+          console.warn("Local storage write failed:", e);
+        }
+      }
+
+      // Sync to server via API
       try {
         const saveMsgs = msgs.map((m) => ({
           role: m.role,
           content: m.content,
           fileName: m.fileName,
-          image: m.image,
+          image: m.image && !m.image.startsWith("data:") ? m.image : undefined,
           generatedImage: m.generatedImage,
         }));
-        await fetch("/api/history", {
+
+        const res = await fetch("/api/history", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chatId, title, messages: saveMsgs }),
         });
-        setChats((prev) =>
-          [{ id: chatId, title, updatedAt: Date.now() }, ...prev.filter((c) => c.id !== chatId)].slice(0, 50)
-        );
-      } catch (e) {
-        console.error("Save failed:", e);
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `HTTP ${res.status}`);
+        }
+      } catch (err: any) {
+        console.error(`Save to server failed (attempt ${retryCount + 1}):`, err.message);
+        if (retryCount === 0) {
+          // Retry once after 2 seconds
+          setTimeout(() => {
+            saveChatImmediately(msgs, chatId, 1);
+          }, 2000);
+        } else {
+          setServerErrorBanner(`History server me save nahi hui (${err.message}) — local backup me save kar liya gaya hai.`);
+        }
       }
     },
-    [status]
+    [userEmail, getLocalKey]
   );
 
+  // 6. beforeunload flush with keepalive fetch
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const msgs = currentMessagesRef.current;
+      const cId = currentChatIdRef.current;
+      if (userEmail && msgs.length > 1) {
+        const title = msgs.find((m) => m.role === "user")?.content?.slice(0, 40) || "Naya Chat";
+        const payload = JSON.stringify({
+          chatId: cId,
+          title,
+          messages: msgs.map((m) => ({
+            role: m.role,
+            content: m.content,
+            fileName: m.fileName,
+            generatedImage: m.generatedImage,
+          })),
+        });
+        try {
+          fetch("/api/history", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payload,
+            keepalive: true,
+          });
+        } catch (e) {}
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [userEmail]);
+
+  // Start new chat (flushing any pending unsaved state)
   const newChat = () => {
+    if (messages.length > 1) {
+      saveChatImmediately(messages, currentChatId);
+    }
     setCurrentChatId(genId());
-    setMessages([{ role: "bot", content: WELCOME }]);
+    setMessages([{ role: "bot", content: WELCOME, timestamp: Date.now() }]);
     setHistory([]);
     setInput("");
     setAttachedFile(null);
     if (isMobile) setSidebarOpen(false);
   };
 
+  // Load chat by id (server first, with local fallback)
   const loadChat = async (chatId: string) => {
     try {
       const res = await fetch(`/api/history?chatId=${chatId}`);
-      const data = await res.json();
-      if (Array.isArray(data.messages) && data.messages.length) {
-        setMessages(data.messages);
-        setHistory(
-          data.messages.map((m: Message) => ({
-            role: m.role === "bot" ? "assistant" : "user",
-            content: m.content,
-          }))
-        );
-        setCurrentChatId(chatId);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.messages) && data.messages.length) {
+          setMessages(data.messages);
+          setHistory(
+            data.messages.map((m: Message) => ({
+              role: m.role === "bot" ? "assistant" : "user",
+              content: m.content,
+            }))
+          );
+          setCurrentChatId(chatId);
+          if (isMobile) setSidebarOpen(false);
+          return;
+        }
       }
-      if (isMobile) setSidebarOpen(false);
-    } catch (e) {
-      console.error("Load failed:", e);
+    } catch (e) {}
+
+    // Fallback to local storage cache if server load fails or returned empty
+    const localKey = getLocalKey(userEmail);
+    if (localKey && typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem(localKey);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const cachedMessages = parsed.messagesByChat?.[chatId];
+          if (Array.isArray(cachedMessages) && cachedMessages.length) {
+            setMessages(cachedMessages);
+            setHistory(
+              cachedMessages.map((m: Message) => ({
+                role: m.role === "bot" ? "assistant" : "user",
+                content: m.content,
+              }))
+            );
+            setCurrentChatId(chatId);
+          }
+        }
+      } catch (e) {}
     }
+    if (isMobile) setSidebarOpen(false);
   };
 
   const deleteChat = async (e: React.MouseEvent, chatId: string) => {
     e.stopPropagation();
-    await fetch("/api/history", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatId }),
-    });
+    if (!confirm("Kya aap sach me is chat ko delete karna chahte hain?")) return;
+
+    // Delete locally
+    const localKey = getLocalKey(userEmail);
+    if (localKey && typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem(localKey);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          parsed.chats = (parsed.chats || []).filter((c: Chat) => c.id !== chatId);
+          if (parsed.messagesByChat) delete parsed.messagesByChat[chatId];
+          localStorage.setItem(localKey, JSON.stringify(parsed));
+        }
+      } catch (e) {}
+    }
+
     setChats((prev) => prev.filter((c) => c.id !== chatId));
+
+    // Delete on server
+    try {
+      await fetch("/api/history", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId }),
+      });
+    } catch (e) {
+      console.warn("Server delete call failed:", e);
+    }
+
     if (currentChatId === chatId) newChat();
   };
 
@@ -210,14 +416,19 @@ export default function ChatPage() {
       setAttachedFile(result);
       setMode("analyze");
     } catch {
-      alert("File padhi nahi ja saki.");
+      alert("File read nahi ho saki.");
     }
     e.target.value = "";
   };
 
+  const handleCopy = (text: string, index: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
   const handleDownload = async (imageUrl: string) => {
     try {
-      // Use proxy for clean cross-origin download
       const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
       const link = document.createElement("a");
       link.href = proxyUrl;
@@ -230,28 +441,32 @@ export default function ChatPage() {
     }
   };
 
-  const handleSend = async () => {
-    if ((!input.trim() && !attachedFile) || isLoading) return;
-    const userMsg = input.trim();
+  const handleSend = async (overridePrompt?: string, overrideMode?: Mode) => {
+    const targetMsg = (overridePrompt ?? input).trim();
+    const targetMode = overrideMode ?? mode;
     const file = attachedFile;
-    const currentMode = mode;
+
+    if ((!targetMsg && !file) || isLoading) return;
 
     const newMsg: Message = {
       role: "user",
-      content: userMsg || `📎 ${file?.name}`,
+      content: targetMsg || `📎 ${file?.name}`,
       image: file?.type === "image" ? `data:${file.mime};base64,${file.data}` : undefined,
       fileName: file?.type === "pdf" || file?.type === "text" ? file.name : undefined,
+      timestamp: Date.now(),
     };
 
     const newMessages = [...messages, newMsg];
     setMessages(newMessages);
+    setInput("");
+    setAttachedFile(null);
     setIsLoading(true);
 
     try {
       const body: any = {
-        message: userMsg,
+        message: targetMsg,
         history,
-        mode: currentMode,
+        mode: targetMode,
       };
 
       if (file?.type === "image") {
@@ -280,40 +495,51 @@ export default function ChatPage() {
 
       if (!res.ok || (!data.reply && !data.generatedImage)) {
         const errorContent = data?.reply || data?.error || `Server error (${res.status})`;
-        const errorMsg: Message = { role: "bot", content: errorContent };
-        setMessages([...newMessages, errorMsg]);
-        // Do NOT clear user input on failure so they can retry
+        const errorMsg: Message = {
+          role: "bot",
+          content: errorContent,
+          isError: true,
+          promptUsed: targetMsg,
+          timestamp: Date.now(),
+        };
+        const finalMessages = [...newMessages, errorMsg];
+        setMessages(finalMessages);
+        saveChatImmediately(finalMessages, currentChatId);
         return;
       }
-
-      // Success: Clear input and attached file
-      setInput("");
-      setAttachedFile(null);
 
       const botMsg: Message = {
         role: "bot",
         content: data.reply || "",
         generatedImage: data.generatedImage,
+        promptUsed: targetMsg,
+        timestamp: Date.now(),
       };
 
       const finalMessages = [...newMessages, botMsg];
       setMessages(finalMessages);
 
-      if (currentMode === "chat") {
+      if (targetMode === "chat") {
         setHistory((prev) => [
           ...prev,
-          { role: "user", content: userMsg },
+          { role: "user", content: targetMsg },
           { role: "assistant", content: data.reply },
         ]);
       }
 
-      clearTimeout(saveTimeout.current);
-      saveTimeout.current = setTimeout(() => saveChat(finalMessages, currentChatId), 1500);
+      // SAVE IMMEDIATELY (no delay/debounce loss)
+      saveChatImmediately(finalMessages, currentChatId);
     } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", content: `Server se jawab nahi aaya — ${err.message || "Network issue"}` },
-      ]);
+      const errorMsg: Message = {
+        role: "bot",
+        content: `Server se jawab nahi aaya — ${err.message || "Network issue"}`,
+        isError: true,
+        promptUsed: targetMsg,
+        timestamp: Date.now(),
+      };
+      const finalMessages = [...newMessages, errorMsg];
+      setMessages(finalMessages);
+      saveChatImmediately(finalMessages, currentChatId);
     } finally {
       setIsLoading(false);
     }
@@ -328,19 +554,24 @@ export default function ChatPage() {
     imagine: {
       label: "Image Banao",
       icon: <ImageIcon size={13} />,
-      placeholder: "Image describe karo — e.g. cute cat astronaut in space",
+      placeholder: "Image describe karo — e.g. cute cat astronaut floating in space",
     },
     search_photo: {
       label: "Real Photo Dhundo",
       icon: <Search size={13} />,
-      placeholder: "Web photo search karo — e.g. Taj Mahal, Red Fort Delhi",
+      placeholder: "Real web photo search karein — e.g. Taj Mahal, Red Fort",
     },
     analyze: {
       label: "Analyze",
       icon: <FileText size={13} />,
-      placeholder: "File upload karein aur uske baare me poochhein...",
+      placeholder: "Document ya Image attach karein aur poochhein...",
     },
   };
+
+  // Filtered chats based on search query
+  const filteredChats = chats.filter((c) =>
+    c.title.toLowerCase().includes(chatSearch.toLowerCase())
+  );
 
   const groupChats = (list: Chat[]) => {
     const now = Date.now();
@@ -355,11 +586,18 @@ export default function ChatPage() {
     return g;
   };
 
-  const grouped = groupChats(chats);
+  const grouped = groupChats(filteredChats);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#0a0a0f] text-white selection:bg-amber-500/30 selection:text-white">
-      {/* Mobile sidebar overlay */}
+    <div className="flex h-screen overflow-hidden bg-[#0a0a0f] text-white selection:bg-amber-500/30 selection:text-white relative">
+      {/* Three Soft Ambient Orbs */}
+      <div className="ambient-orbs">
+        <div className="ambient-orb-saffron" />
+        <div className="ambient-orb-green" />
+        <div className="absolute top-[40%] right-[30%] w-[500px] height-[500px] bg-radial from-blue-500/5 to-transparent rounded-full blur-[70px] pointer-events-none" />
+      </div>
+
+      {/* Mobile drawer overlay */}
       {sidebarOpen && isMobile && (
         <div
           onClick={() => setSidebarOpen(false)}
@@ -367,10 +605,10 @@ export default function ChatPage() {
         />
       )}
 
-      {/* SIDEBAR */}
+      {/* SIDEBAR: True Liquid Glass with 1px top highlight */}
       <aside
-        className={`w-64 flex-shrink-0 flex flex-col bg-[#0a0a0f]/95 border-r border-white/10 z-50 transition-transform duration-200 ease-in-out ${
-          isMobile ? "fixed inset-y-0 left-0" : "relative h-screen"
+        className={`w-64 flex-shrink-0 flex flex-col bg-[#0a0a0f]/85 border-r border-white/10 z-50 backdrop-blur-2xl transition-transform duration-200 ease-in-out ${
+          isMobile ? "fixed inset-y-0 left-0 shadow-2xl" : "relative h-screen"
         } ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:w-0 md:overflow-hidden md:border-r-0"}`}
       >
         {/* Sidebar Header */}
@@ -396,21 +634,34 @@ export default function ChatPage() {
             )}
           </div>
 
+          {/* New Chat Button */}
           <button
             onClick={newChat}
-            className="w-full py-2 px-3 rounded-xl bg-[#FF9933]/10 border border-[#FF9933]/30 text-[#FF9933] hover:bg-[#FF9933]/20 text-xs font-semibold flex items-center justify-center gap-2 transition-all"
+            className="w-full py-2 px-3 rounded-xl btn-primary text-xs !shadow-sm flex items-center justify-center gap-2"
           >
             <PenSquare size={14} />
             <span>Naya Chat</span>
           </button>
+
+          {/* Search Chats Input */}
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-2.5 text-white/30" />
+            <input
+              type="text"
+              value={chatSearch}
+              onChange={(e) => setChatSearch(e.target.value)}
+              placeholder="Search conversations..."
+              className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white placeholder-white/30 focus:border-[#FF9933]/50 focus:outline-none"
+            />
+          </div>
         </div>
 
-        {/* Chats List */}
+        {/* Chats Timeline List */}
         <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4 text-xs scrollbar-none">
-          {chats.length === 0 ? (
+          {filteredChats.length === 0 ? (
             <div className="text-center text-white/30 py-12 px-4">
               <MessageSquare size={22} className="mx-auto mb-2 opacity-30" />
-              <span>Abhi koi chat nahi</span>
+              <span>{chats.length === 0 ? "Abhi koi chat nahi" : "Koi match nahi mila"}</span>
             </div>
           ) : (
             Object.entries(grouped).map(([group, list]) =>
@@ -423,10 +674,10 @@ export default function ChatPage() {
                     <div
                       key={chat.id}
                       onClick={() => loadChat(chat.id)}
-                      className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                      className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-all ${
                         currentChatId === chat.id
-                          ? "bg-[#FF9933]/15 text-[#FF9933] border border-[#FF9933]/25"
-                          : "text-white/60 hover:bg-white/5 hover:text-white"
+                          ? "bg-gradient-to-r from-[#FF9933]/15 to-[#FF9933]/5 text-[#FF9933] border border-[#FF9933]/30 shadow-xs"
+                          : "text-white/60 hover:bg-white/5 hover:text-white border border-transparent"
                       }`}
                     >
                       <span className="truncate flex-1 text-xs">{chat.title}</span>
@@ -445,52 +696,62 @@ export default function ChatPage() {
           )}
         </div>
 
-        {/* Sidebar Footer User Info */}
+        {/* Sidebar Footer User Card with Role Badge & Admin Link */}
         {session?.user && (
-          <div className="p-3 border-t border-white/10 bg-white/[0.02] flex items-center gap-2.5">
-            {session.user.image ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={session.user.image}
-                className="w-8 h-8 rounded-full border border-white/20 object-cover flex-shrink-0"
-                alt="avatar"
-              />
-            ) : (
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF9933] to-[#138808] text-black font-bold text-xs flex items-center justify-center flex-shrink-0">
-                {(session.user.name || session.user.email || "U")[0].toUpperCase()}
-              </div>
+          <div className="p-3 border-t border-white/10 bg-white/[0.02] flex flex-col gap-2">
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className="w-full py-1.5 px-3 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-xs"
+              >
+                <Shield size={13} />
+                <span>Admin Dashboard</span>
+              </Link>
             )}
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-white/90 truncate flex items-center gap-1">
-                <span>{session.user.name || "User"}</span>
-                {isAdmin && (
-                  <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-400 font-mono">
-                    ADMIN
+
+            <div className="flex items-center gap-2.5">
+              {session.user.image ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={session.user.image}
+                  className="w-8 h-8 rounded-full border border-white/20 object-cover flex-shrink-0"
+                  alt="avatar"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF9933] to-[#138808] text-black font-bold text-xs flex items-center justify-center flex-shrink-0">
+                  {(session.user.name || session.user.email || "U")[0].toUpperCase()}
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-white/90 truncate flex items-center gap-1.5">
+                  <span className="truncate">{session.user.name || "User"}</span>
+                  <span
+                    className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
+                      isAdmin
+                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                        : "bg-white/10 text-white/50 border border-white/10"
+                    }`}
+                  >
+                    {isAdmin ? "ADMIN" : "USER"}
                   </span>
-                )}
+                </div>
+                <div className="text-[10px] text-white/40 truncate">{session.user.email}</div>
               </div>
-              <div className="text-[10px] text-white/40 truncate">{session.user.email}</div>
+              <button
+                onClick={() => signOut({ callbackUrl: "/" })}
+                title="Sign out"
+                className="p-1.5 text-white/30 hover:text-red-400 rounded-lg hover:bg-white/5 transition-colors"
+              >
+                <LogOut size={15} />
+              </button>
             </div>
-            <button
-              onClick={() => signOut({ callbackUrl: "/" })}
-              title="Sign out"
-              className="p-1.5 text-white/30 hover:text-red-400 rounded-lg hover:bg-white/5 transition-colors"
-            >
-              <LogOut size={15} />
-            </button>
           </div>
         )}
       </aside>
 
       {/* MAIN CHAT AREA */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-        {/* Ambient background */}
-        <div className="ambient-orbs">
-          <div className="ambient-orb-saffron" />
-          <div className="ambient-orb-green" />
-        </div>
-
-        {/* Chat Header */}
+        {/* Chat Top Bar */}
         <header className="sticky top-0 z-30 glass-header px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
@@ -503,17 +764,31 @@ export default function ChatPage() {
             <div className="flex items-center gap-2">
               <span className="font-bold text-sm sm:text-base tricolour-text">Bharat AI</span>
               <span className="text-xs text-white/30 hidden sm:inline">|</span>
-              <span className="text-xs text-white/40 hidden sm:inline">India Ka AI Assistant</span>
+              <span className="text-xs text-white/40 hidden sm:inline">All-in-One AI Assistant</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            {/* Role badge in header */}
+            {session?.user && (
+              <span
+                className={`hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  isAdmin
+                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                    : "bg-white/10 text-white/50 border border-white/10"
+                }`}
+              >
+                {isAdmin ? "ADMIN" : "USER"}
+              </span>
+            )}
+
+            {/* Admin button if admin */}
             {isAdmin && (
               <Link
                 href="/admin"
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-all"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 transition-all shadow-xs"
               >
-                <Shield size={12} />
+                <Shield size={13} />
                 Admin
               </Link>
             )}
@@ -522,41 +797,89 @@ export default function ChatPage() {
               href="/"
               className="hidden sm:inline-flex text-xs text-white/40 hover:text-white transition-colors"
             >
-              Landing Page
+              Landing
             </Link>
 
             <div className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-full px-2.5 py-1 text-[11px] text-white/60">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
-              <span>ONLINE</span>
+              <span className="text-[10px]">ONLINE</span>
             </div>
           </div>
         </header>
 
+        {/* Server Database Alert Banner */}
+        {serverErrorBanner && (
+          <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 text-xs text-amber-200 flex items-center justify-between z-20">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={14} className="flex-shrink-0 text-amber-400" />
+              <span>{serverErrorBanner}</span>
+            </div>
+            <button
+              onClick={() => setServerErrorBanner(null)}
+              className="text-white/40 hover:text-white text-sm ml-2"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Messages Scroll Area */}
         <div ref={chatAreaRef} className="flex-1 overflow-y-auto px-4 py-6 scrollbar-none relative z-10">
-          <div className="max-w-3xl mx-auto space-y-5">
+          <div className="max-w-3xl mx-auto space-y-6">
+            {/* Empty State Welcome Card with Suggestions */}
+            {messages.length === 1 && messages[0].content === WELCOME && (
+              <div className="glass-card p-6 sm:p-8 rounded-3xl border border-white/10 text-center my-6 shadow-2xl">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#FF9933] to-[#138808] text-white text-xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                  🇮🇳
+                </div>
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight mb-2">
+                  Namaste, {session?.user?.name || "Friend"}!
+                </h2>
+                <p className="text-xs sm:text-sm text-white/60 max-w-md mx-auto mb-6 leading-relaxed">
+                  Main Bharat AI hoon — aapka smart desi assistant. Niche diye gaye topics par click karke turant shuru karein:
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+                  {SUGGESTIONS.map((s, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setMode(s.mode);
+                        handleSend(s.text, s.mode);
+                      }}
+                      className="glass p-3 rounded-2xl hover:border-[#FF9933]/40 hover:bg-white/[0.06] transition-all flex items-center gap-3 group text-xs text-white/80"
+                    >
+                      <span className="text-lg flex-shrink-0">{s.icon}</span>
+                      <span className="font-medium group-hover:text-white transition-colors">{s.text}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Chat Messages */}
             {messages.map((m, i) => (
               <div
                 key={i}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} animate-fadeIn`}
+                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} animate-fadeIn group`}
               >
                 {m.role === "bot" && (
                   <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF9933] to-[#138808] flex items-center justify-center text-xs flex-shrink-0 mr-3 mt-1 shadow-md">
                     🇮🇳
                   </div>
                 )}
+
                 <div className="max-w-[85%] sm:max-w-[78%]">
-                  {/* Uploaded User Image */}
+                  {/* Uploaded User Attachment */}
                   {m.image && (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
                       src={m.image}
                       alt="upload"
-                      className="max-w-[220px] rounded-xl mb-2 ml-auto border border-white/20"
+                      className="max-w-[220px] rounded-xl mb-2 ml-auto border border-white/20 shadow-md"
                     />
                   )}
 
-                  {/* Uploaded Document Badge */}
                   {m.fileName && (
                     <div className="flex items-center gap-2 bg-[#FF9933]/10 border border-[#FF9933]/30 rounded-xl px-3 py-1.5 mb-2 ml-auto w-fit text-xs text-[#FF9933]">
                       <FileText size={14} />
@@ -564,12 +887,14 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  {/* Message Bubble */}
+                  {/* Message Bubble: Soft saffron gradient for user, true glass with inner highlight for bot */}
                   <div
-                    className={`p-3.5 sm:p-4 rounded-2xl text-sm leading-relaxed ${
+                    className={`p-3.5 sm:p-4 rounded-2xl text-sm leading-relaxed relative ${
                       m.role === "user"
-                        ? "bg-gradient-to-r from-[#FF9933] to-[#e8851a] text-black font-medium rounded-tr-xs shadow-md"
-                        : "glass text-white/90 rounded-tl-xs border border-white/10"
+                        ? "bg-gradient-to-r from-[#FF9933] to-[#e8851a] text-black font-medium rounded-tr-xs shadow-[0_6px_20px_rgba(255,153,51,0.25)]"
+                        : m.isError
+                        ? "glass border border-red-500/40 text-red-300 rounded-tl-xs shadow-md"
+                        : "glass text-white/90 rounded-tl-xs border border-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.3)]"
                     }`}
                   >
                     {m.role === "bot" ? (
@@ -579,11 +904,47 @@ export default function ChatPage() {
                     ) : (
                       <span className="whitespace-pre-wrap">{m.content}</span>
                     )}
+
+                    {/* Bot Message Action Row (Copy + Retry on error) */}
+                    {m.role === "bot" && (
+                      <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[11px] text-white/40">
+                        <span>{m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleCopy(m.content, i)}
+                            className="p-1 hover:text-white rounded hover:bg-white/5 transition-colors flex items-center gap-1"
+                            title="Copy reply"
+                          >
+                            {copiedIndex === i ? (
+                              <>
+                                <Check size={12} className="text-emerald-400" />
+                                <span className="text-emerald-400">Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={12} />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
+
+                          {m.isError && m.promptUsed && (
+                            <button
+                              onClick={() => handleSend(m.promptUsed)}
+                              className="p-1 text-[#FF9933] hover:text-white rounded hover:bg-white/5 transition-colors flex items-center gap-1 font-semibold"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Retry</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Generated Image Result Card */}
+                  {/* Generated Image Result Card: nologo URL, Action row (Download, Open, Regenerate) */}
                   {m.generatedImage && (
-                    <div className="mt-3 p-2 rounded-2xl glass border border-white/10 space-y-2">
+                    <div className="mt-3 p-3 rounded-2xl glass-card border border-white/10 space-y-2.5">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={m.generatedImage}
@@ -593,15 +954,38 @@ export default function ChatPage() {
                           (e.target as HTMLImageElement).alt = "Image load error";
                         }}
                       />
-                      <div className="flex items-center justify-between pt-1 px-1">
-                        <span className="text-[11px] text-white/40">Generated via Pollinations Flux</span>
-                        <button
-                          onClick={() => handleDownload(m.generatedImage!)}
-                          className="btn-ghost !py-1 !px-3 text-xs flex items-center gap-1.5"
-                        >
-                          <Download size={13} />
-                          Download
-                        </button>
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 px-1">
+                        <span className="text-[11px] text-white/40">Generated via Flux (No Watermark)</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleDownload(m.generatedImage!)}
+                            className="btn-ghost !py-1 !px-2.5 text-xs flex items-center gap-1"
+                            title="Download file"
+                          >
+                            <Download size={13} />
+                            <span>Download</span>
+                          </button>
+                          <a
+                            href={m.generatedImage}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn-ghost !py-1 !px-2.5 text-xs flex items-center gap-1"
+                            title="Open full size in new tab"
+                          >
+                            <ExternalLink size={13} />
+                            <span>Open</span>
+                          </a>
+                          {m.promptUsed && (
+                            <button
+                              onClick={() => handleSend(m.promptUsed, "imagine")}
+                              className="btn-ghost !py-1 !px-2.5 text-xs flex items-center gap-1"
+                              title="Regenerate with same prompt"
+                            >
+                              <RotateCcw size={13} />
+                              <span>Regen</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -611,22 +995,31 @@ export default function ChatPage() {
 
             {/* Typing / Loading Skeleton */}
             {isLoading && (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 animate-fadeIn">
                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF9933] to-[#138808] flex items-center justify-center text-xs shadow-md">
                   🇮🇳
                 </div>
-                <div className="glass px-4 py-3 rounded-2xl rounded-tl-xs flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-[#FF9933] animate-bounce" />
-                  <div className="w-2 h-2 rounded-full bg-white animate-bounce [animation-delay:0.15s]" />
-                  <div className="w-2 h-2 rounded-full bg-[#138808] animate-bounce [animation-delay:0.3s]" />
+                <div className="glass px-4 py-3 rounded-2xl rounded-tl-xs flex items-center gap-2 border border-white/10">
+                  {mode === "imagine" ? (
+                    <div className="flex items-center gap-2 text-xs text-[#FF9933]">
+                      <Sparkles size={14} className="animate-spin" />
+                      <span>Image ban rahi hai...</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-[#FF9933] animate-bounce" />
+                      <div className="w-2 h-2 rounded-full bg-white animate-bounce [animation-delay:0.15s]" />
+                      <div className="w-2 h-2 rounded-full bg-[#138808] animate-bounce [animation-delay:0.3s]" />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Input Bar Area */}
-        <div className="p-3 sm:p-4 bg-gradient-to-t from-[#0a0a0f] via-[#0a0a0f]/90 to-transparent relative z-20">
+        {/* FLOATING GLASS COMPOSER */}
+        <div className="p-3 sm:p-5 bg-gradient-to-t from-[#0a0a0f] via-[#0a0a0f]/90 to-transparent relative z-20">
           <div className="max-w-3xl mx-auto">
             {/* Mode Selector Tabs */}
             <div className="flex items-center justify-center gap-1.5 sm:gap-2 mb-2.5 overflow-x-auto py-1 scrollbar-none">
@@ -636,8 +1029,8 @@ export default function ChatPage() {
                   onClick={() => setMode(m)}
                   className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${
                     mode === m
-                      ? "bg-[#FF9933]/15 text-[#FF9933] border border-[#FF9933]/40 shadow-xs"
-                      : "bg-white/5 text-white/40 hover:text-white border border-white/5"
+                      ? "bg-gradient-to-r from-[#FF9933]/25 to-[#FF9933]/10 text-[#FF9933] border border-[#FF9933]/40 shadow-xs"
+                      : "bg-white/5 text-white/50 hover:text-white border border-white/5"
                   }`}
                 >
                   {modeConfig[m].icon}
@@ -669,8 +1062,8 @@ export default function ChatPage() {
               </div>
             )}
 
-            {/* Input Box */}
-            <div className="glass rounded-2xl p-2 sm:p-2.5 flex items-end gap-2 border border-white/10 shadow-xl focus-within:border-[#FF9933]/50 transition-colors">
+            {/* Composer Card */}
+            <div className="glass-card rounded-2xl p-2 sm:p-2.5 flex items-end gap-2 border border-white/10 shadow-2xl focus-within:border-[#FF9933]/50 transition-colors">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -699,23 +1092,23 @@ export default function ChatPage() {
                 }}
                 placeholder={modeConfig[mode].placeholder}
                 rows={1}
-                className="flex-1 bg-transparent border-none outline-none text-sm text-white placeholder-white/30 resize-none py-1.5 px-1 max-h-32"
+                className="flex-1 bg-transparent border-none outline-none text-sm text-white placeholder-white/30 resize-none py-1.5 px-1 max-h-36 scrollbar-none"
               />
 
               <button
                 type="button"
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={isLoading || (!input.trim() && !attachedFile)}
-                className="btn-primary !p-2 sm:!p-2.5 !rounded-xl flex-shrink-0 disabled:opacity-20"
+                className="btn-primary !p-2.5 !rounded-xl flex-shrink-0 disabled:opacity-20 transition-all"
                 aria-label="Send Message"
               >
                 <Send size={16} />
               </button>
             </div>
 
-            <div className="text-center mt-2">
+            <div className="text-center mt-2.5">
               <span className="text-[10px] text-white/30">
-                Bharat AI by Himanshu Ranjan &nbsp;|&nbsp; Multilingual &amp; Multimodal
+                Bharat AI by Himanshu Ranjan &nbsp;|&nbsp; Multilingual &amp; Multimodal Assistant
               </span>
             </div>
           </div>

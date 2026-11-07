@@ -3,13 +3,14 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { useSession, signOut } from "next-auth/react";
-import { Menu, X, Shield, LogOut, ArrowRight } from "lucide-react";
+import { Menu, X, Shield, LogOut, ArrowRight, User } from "lucide-react";
 
 export function Header() {
   const { data: session, status } = useSession();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const isAdmin = (session?.user as any)?.role === "admin";
+  const role = (session?.user as any)?.role || "user";
+  const isAdmin = role === "admin";
 
   return (
     <header className="sticky top-0 z-50 glass-header">
@@ -43,15 +44,28 @@ export function Header() {
             <div className="w-20 h-9 rounded-xl bg-white/5 animate-pulse" />
           ) : session?.user ? (
             <div className="flex items-center gap-2 sm:gap-3">
+              {/* Role badge visible to EVERY logged-in user */}
+              <span
+                className={`hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase ${
+                  isAdmin
+                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                    : "bg-white/10 text-white/50 border border-white/10"
+                }`}
+              >
+                {isAdmin ? "ADMIN" : "USER"}
+              </span>
+
+              {/* Admin Button on Header (Only when ADMIN) */}
               {isAdmin && (
                 <Link
                   href="/admin"
-                  className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-all"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 transition-all shadow-sm"
                 >
                   <Shield size={13} />
                   Admin
                 </Link>
               )}
+
               <Link
                 href="/chat"
                 className="btn-primary text-xs sm:text-sm !py-1.5 sm:!py-2 !px-3 sm:!px-4 font-semibold"
@@ -59,6 +73,7 @@ export function Header() {
                 Open App
                 <ArrowRight size={14} className="hidden sm:inline" />
               </Link>
+
               <div className="flex items-center gap-2 pl-1 border-l border-white/10">
                 {session.user.image ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
@@ -112,6 +127,23 @@ export function Header() {
       {/* Mobile Drawer */}
       {mobileMenuOpen && (
         <div className="md:hidden border-t border-white/10 bg-[#0a0a0f]/95 backdrop-blur-xl px-4 py-4 space-y-3">
+          {session?.user && (
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 text-xs">
+              <div className="truncate text-white/80 font-medium">
+                {session.user.email}
+              </div>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                  isAdmin
+                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                    : "bg-white/10 text-white/50"
+                }`}
+              >
+                {isAdmin ? "ADMIN" : "USER"}
+              </span>
+            </div>
+          )}
+
           <nav className="flex flex-col space-y-2 text-sm text-white/80 font-medium">
             <a
               href="/#features"
@@ -152,7 +184,7 @@ export function Header() {
               <Link
                 href="/admin"
                 onClick={() => setMobileMenuOpen(false)}
-                className="px-3 py-2 rounded-lg text-amber-400 bg-amber-500/10 border border-amber-500/20 flex items-center gap-2"
+                className="px-3 py-2 rounded-lg text-amber-400 bg-amber-500/15 border border-amber-500/30 flex items-center gap-2 font-semibold"
               >
                 <Shield size={14} /> Admin Dashboard
               </Link>
@@ -163,4 +195,3 @@ export function Header() {
     </header>
   );
 }
-

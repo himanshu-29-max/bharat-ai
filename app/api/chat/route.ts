@@ -2,10 +2,9 @@ import { NextResponse } from "next/server";
 import { Groq } from "groq-sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// Clear intent check for image generation command
+// Explicit image generation intent (command + target)
 function isExplicitImagePrompt(text: string): boolean {
   const t = text.toLowerCase();
-  // Check for combination of command + target
   const actionWords = ["banao", "banado", "banaye", "generate", "draw", "create", "make"];
   const targetWords = ["image", "photo", "picture", "chitra", "tasveer", "wallpaper"];
 
@@ -13,6 +12,14 @@ function isExplicitImagePrompt(text: string): boolean {
   const hasTarget = targetWords.some((w) => t.includes(w));
 
   return hasAction && hasTarget;
+}
+
+// Explicit real photo search intent (verb + photo word)
+function isExplicitPhotoSearch(text: string): boolean {
+  const t = text.toLowerCase();
+  const hasPhoto = /(photo|photograph|tasveer|real photo|actual photo)/i.test(t);
+  const hasVerb = /(dikhao|dekhao|bhejo|search|find|show me|look up)/i.test(t);
+  return hasPhoto && hasVerb;
 }
 
 // Check if message requires real-time search
@@ -66,32 +73,22 @@ export async function POST(req: Request) {
     }
 
     // -------------------------------------------------------------
-    // FEATURE: IMAGE GENERATION (Pollinations Flux)
+    // FEATURE 1: IMAGE GENERATION
+    // Only in 'imagine' mode OR explicit generation command (banao/generate + image)
     // -------------------------------------------------------------
     const shouldGenerateImage =
       mode === "imagine" ||
-      (mode !== "search_photo" && mode !== "analyze" && isExplicitImagePrompt(cleanMsg));
+      (mode === "chat" && isExplicitImagePrompt(cleanMsg));
 
     if (shouldGenerateImage && cleanMsg) {
-      // Clean query for image generation
       const promptQuery = cleanMsg
         .replace(/^(image\s+banao|photo\s+banao|generate\s+image|draw|create\s+image|banao\s+image|banado)\s*:?/i, "")
         .trim();
 
       const seed = Math.floor(Math.random() * 1000000);
       const encodedPrompt = encodeURIComponent(promptQuery || cleanMsg);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true&model=flux`;
-
-      // Quick head / fetch check with retry once
-      try {
-        let testRes = await fetch(imageUrl, { method: "HEAD", signal: AbortSignal.timeout(10000) });
-        if (!testRes.ok) {
-          // retry once
-          testRes = await fetch(imageUrl, { method: "HEAD", signal: AbortSignal.timeout(15000) });
-        }
-      } catch (pollErr: any) {
-        console.warn("Pollinations preview verify warning (proceeding with direct URL):", pollErr.message);
-      }
+      // Place nologo=true first in query string with nologo=1 & nofeed=true to ensure zero watermarks
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?nologo=true&nologo=1&nofeed=true&model=flux&width=1024&height=1024&seed=${seed}`;
 
       return NextResponse.json({
         reply: `Aapki image generate ho gayi hai:\n**Prompt:** "${promptQuery || cleanMsg}"`,
@@ -100,11 +97,21 @@ export async function POST(req: Request) {
     }
 
     // -------------------------------------------------------------
-    // FEATURE: REAL PHOTO SEARCH (Serper Google Images / Wikipedia)
+    // FEATURE 2: REAL PHOTO SEARCH
+    // ONLY in 'search_photo' mode OR (in chat mode) with explicit photo command (e.g. "taj mahal ki photo dikhao")
+    // Never hijack bare topic queries like "taj mahal"
     // -------------------------------------------------------------
-    if (mode === "search_photo") {
+    const shouldSearchRealPhoto =
+      mode === "search_photo" ||
+      (mode === "chat" && isExplicitPhotoSearch(cleanMsg));
+
+    if (shouldSearchRealPhoto) {
       let photoUrl = "";
-      if (serperKey && cleanMsg) {
+      const searchTarget = cleanMsg
+        .replace(/(ki photo dikhao|ka photo dikhao|ki photo bhejo|ka photo bhejo|photo dikhao|photo bhejo|show me a real photo of|show photo of|real photo)/gi, "")
+        .trim() || cleanMsg;
+
+      if (serperKey && searchTarget) {
         try {
           const sRes = await fetch("https://google.serper.dev/images", {
             method: "POST",
@@ -112,7 +119,7 @@ export async function POST(req: Request) {
               "X-API-KEY": serperKey,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ q: cleanMsg, num: 3 }),
+            body: JSON.stringify({ q: `${searchTarget} high resolution real photograph`, num: 3 }),
           });
           const sData = await sRes.json();
           if (sData.images?.[0]?.imageUrl) {
@@ -125,18 +132,17 @@ export async function POST(req: Request) {
 
       if (photoUrl) {
         return NextResponse.json({
-          reply: `Real photo for: "${cleanMsg}"`,
+          reply: `Yeh rahi **${searchTarget}** ki real photograph!`,
           generatedImage: photoUrl,
         });
-      } else {
-        return NextResponse.json({
-          reply: `Maaf kijiye, "${cleanMsg}" ke liye verified web photo nahi mil saki.`,
-        });
       }
+
+      // If photo not found, NEVER return a dead end — fall through to text reply about the subject!
+      console.log(`Real photo not found for "${searchTarget}", falling through to informative text answer.`);
     }
 
     // -------------------------------------------------------------
-    // FEATURE 5B: IMAGE / PDF / TEXT ANALYSIS VIA GEMINI
+    // FEATURE 3: IMAGE / PDF / TEXT ANALYSIS VIA GEMINI
     // -------------------------------------------------------------
     const hasMediaAttachment = !!imageBase64 || !!fileBase64;
 
@@ -160,7 +166,6 @@ export async function POST(req: Request) {
         const questionPrompt = cleanMsg || "Kripya is document ya image ko dhyan se padh kar analyze karein aur iska mukhy vivaran dein.";
 
         if (imageBase64) {
-          // Format data url: data:image/jpeg;base64,... or raw base64
           let base64Data = imageBase64;
           let mime = "image/jpeg";
           if (imageBase64.includes(";base64,")) {
@@ -188,7 +193,6 @@ export async function POST(req: Request) {
               },
             });
           } else {
-            // Text file
             let rawText = "";
             try {
               rawText = Buffer.from(fileBase64, "base64").toString("utf-8");
@@ -227,7 +231,7 @@ export async function POST(req: Request) {
     }
 
     // -------------------------------------------------------------
-    // FEATURE 5A: STANDARD CHAT (GROQ -> GEMINI FALLBACK CHAIN)
+    // FEATURE 4: STANDARD CHAT (GROQ -> GEMINI FALLBACK CHAIN)
     // -------------------------------------------------------------
 
     // 1. Direct Greeting optimization

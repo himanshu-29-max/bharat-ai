@@ -7,13 +7,16 @@ export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
-      return NextResponse.json({ chats: [], messages: [] });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const email = session.user.email.toLowerCase();
     const redis = getRedisClient();
     if (!redis) {
-      return NextResponse.json({ chats: [], messages: [] });
+      return NextResponse.json(
+        { error: "Redis database connection not configured on server (UPSTASH_REDIS_REST_URL missing)." },
+        { status: 500 }
+      );
     }
 
     const { searchParams } = new URL(req.url);
@@ -29,7 +32,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ chats: Array.isArray(chats) ? chats : [] });
   } catch (e: any) {
     console.error("History GET error:", e);
-    return NextResponse.json({ chats: [], messages: [] });
+    return NextResponse.json(
+      { error: `Database error: ${e.message || String(e)}` },
+      { status: 500 }
+    );
   }
 }
 
@@ -43,7 +49,10 @@ export async function POST(req: Request) {
     const email = session.user.email.toLowerCase();
     const redis = getRedisClient();
     if (!redis) {
-      return NextResponse.json({ error: "Redis connection failed" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Redis database connection not configured on server (UPSTASH_REDIS_REST_URL missing)." },
+        { status: 500 }
+      );
     }
 
     const { chatId, title, messages } = await req.json();
@@ -53,12 +62,13 @@ export async function POST(req: Request) {
 
     const userKey = `user:${email}`;
 
-    // Clean messages and preserve generatedImage and file metadata
+    // Clean messages: DO NOT store huge raw base64 data for uploaded images (prevent Redis payload limit blowouts)
+    // Only store generatedImage URLs (Pollinations) and lightweight metadata
     const cleanMsgs = (messages || []).map((m: any) => ({
       role: m.role,
       content: m.content || "",
       fileName: m.fileName || undefined,
-      image: m.image || undefined,
+      image: m.image && !m.image.startsWith("data:") ? m.image : undefined, // omit bulky data: URLs from long-term history
       generatedImage: m.generatedImage || undefined,
     }));
 
@@ -77,7 +87,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
   } catch (e: any) {
     console.error("History POST error:", e);
-    return NextResponse.json({ error: String(e.message || e) }, { status: 500 });
+    return NextResponse.json(
+      { error: `History save failed: ${e.message || String(e)}` },
+      { status: 500 }
+    );
   }
 }
 
@@ -91,7 +104,7 @@ export async function DELETE(req: Request) {
     const email = session.user.email.toLowerCase();
     const redis = getRedisClient();
     if (!redis) {
-      return NextResponse.json({ error: "Redis unavailable" }, { status: 500 });
+      return NextResponse.json({ error: "Redis database connection missing" }, { status: 500 });
     }
 
     const { chatId } = await req.json();
@@ -107,6 +120,6 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ success: true });
   } catch (e: any) {
     console.error("History DELETE error:", e);
-    return NextResponse.json({ error: "Delete failed" }, { status: 500 });
+    return NextResponse.json({ error: `Delete failed: ${e.message || String(e)}` }, { status: 500 });
   }
 }

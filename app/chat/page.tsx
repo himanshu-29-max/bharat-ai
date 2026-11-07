@@ -26,6 +26,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Message = {
   role: "user" | "bot";
@@ -34,6 +35,7 @@ type Message = {
   fileName?: string;
   generatedImage?: string;
   extraImages?: string[];
+  imageSource?: string;
   isError?: boolean;
   promptUsed?: string;
   timestamp?: number;
@@ -86,6 +88,38 @@ async function readFile(file: File): Promise<AttachedFile> {
       reader.readAsText(file);
     }
   });
+}
+
+// Generated/real image with a loading skeleton and gentle auto-retry.
+// Pollinations images are created on first request, so the first load can
+// legitimately take 15-30s — show progress instead of a blank/broken box.
+function GeneratedImage({ src }: { src: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [tries, setTries] = useState(0);
+  return (
+    <div className="relative">
+      {!loaded && (
+        <div className="w-full max-w-md h-64 rounded-xl border border-white/10 bg-white/5 animate-pulse flex items-center justify-center text-white/50 text-xs">
+          Image ban rahi hai, thoda intezaar karein…
+        </div>
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        key={tries}
+        src={src}
+        alt="image result"
+        className={`w-full max-w-md rounded-xl border border-white/10 shadow-lg object-cover ${loaded ? "" : "hidden"}`}
+        onLoad={() => setLoaded(true)}
+        onError={() => {
+          if (tries < 4) {
+            setTimeout(() => setTries((t) => t + 1), 4000 + tries * 3000);
+          } else {
+            setLoaded(true); // give up retrying; alt text dikhega
+          }
+        }}
+      />
+    </div>
+  );
 }
 
 export default function ChatPage() {
@@ -290,6 +324,7 @@ export default function ChatPage() {
           image: m.image && !m.image.startsWith("data:") ? m.image : undefined,
           generatedImage: m.generatedImage,
           extraImages: m.extraImages,
+          imageSource: m.imageSource,
         }));
 
         const res = await fetch("/api/history", {
@@ -333,6 +368,7 @@ export default function ChatPage() {
             fileName: m.fileName,
             generatedImage: m.generatedImage,
           extraImages: m.extraImages,
+          imageSource: m.imageSource,
           })),
         });
         try {
@@ -552,6 +588,7 @@ export default function ChatPage() {
         content: data.reply || "",
         generatedImage: data.generatedImage,
         extraImages: data.extraImages,
+        imageSource: data.imageSource,
         promptUsed: targetMsg,
         timestamp: Date.now(),
       };
@@ -939,7 +976,7 @@ export default function ChatPage() {
                   >
                     {m.role === "bot" ? (
                       <div className="prose prose-invert max-w-none text-sm break-words">
-                        <ReactMarkdown>{m.content}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                       </div>
                     ) : (
                       <span className="whitespace-pre-wrap">{m.content}</span>
@@ -985,17 +1022,9 @@ export default function ChatPage() {
                   {/* Generated Image Result Card: nologo URL, Action row (Download, Open, Regenerate) */}
                   {m.generatedImage && (
                     <div className="mt-3 p-3 rounded-2xl glass-card border border-white/10 space-y-2.5">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={m.generatedImage}
-                        alt="generated result"
-                        className="w-full max-w-md rounded-xl border border-white/10 shadow-lg object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).alt = "Image load error";
-                        }}
-                      />
+                      <GeneratedImage src={m.generatedImage} />
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-1 px-1">
-                        <span className="text-[11px] text-white/40">Generated via Flux (No Watermark)</span>
+                        <span className="text-[11px] text-white/40">{m.imageSource === "real" ? "Real photo • Google Search" : "AI Generated Image"}</span>
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => handleDownload(m.generatedImage!)}

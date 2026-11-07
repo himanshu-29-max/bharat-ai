@@ -149,6 +149,7 @@ export async function POST(req: Request) {
       return NextResponse.json({
         reply: `Aapki image generate ho gayi hai:\n**Prompt:** "${finalPrompt}"${note}`,
         generatedImage: imageUrl,
+        imageSource: "generated",
       });
     }
 
@@ -219,6 +220,7 @@ export async function POST(req: Request) {
           reply: `Yeh rahi **${searchTarget}** ki real photograph! (Google search se li gayi asli photo)`,
           generatedImage: photoUrls[0],
           extraImages: photoUrls.slice(1),
+          imageSource: "real",
         });
       }
 
@@ -380,7 +382,14 @@ export async function POST(req: Request) {
 Current Date & Time: ${aajKiDate}.
 Answer the user accurately, comprehensively, and helpfully.
 Feel free to respond in natural Hinglish, Hindi, or English based on the user's inquiry.
-Provide complete sentences without cutting off mid-way.`;
+Provide complete sentences without cutting off mid-way.
+
+REPLY FORMATTING (bahut zaroori — hamesha follow karo):
+- Jawab saaf Markdown me do: pehle 1-2 line ka short intro/summary, phir zaroorat ho to ## headings aur bullet points. Key baatein **bold** karo.
+- Kabhi bhi lambi text ki deewaar (wall of text) mat banao. Ek paragraph zyada se zyada 2-3 line ka ho, points alag-alag lines me hon.
+- Agar user sirf ek naam ya topic likhe (jaise "narendra modi"), to pehle chhota sa overview do (8-10 line ke andar), phir ant me ek line me poochho ki kya woh kisi khaas hisse par aur detail chahta hai. Poora jeevan-parichay ek saath mat likho.
+- Table sirf tab banao jab tulnaa ya data ho, aur table chhoti rakho (zyada se zyada 5-6 rows). Aam jawab headings + bullets me do.
+- Default jawab medium length ka ho. Lamba detail tabhi do jab user "detail me batao" jaisa kuch kahe.`;
 
     let reply = "";
     let lastError = "";

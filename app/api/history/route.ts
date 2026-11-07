@@ -93,6 +93,7 @@ export async function POST(req: Request) {
       image: m.image && !m.image.startsWith("data:") ? m.image : undefined, // omit bulky data: URLs from long-term history
       generatedImage: m.generatedImage || undefined,
       extraImages: Array.isArray(m.extraImages) ? m.extraImages.slice(0, 4) : undefined,
+      imageSource: m.imageSource || undefined,
     }));
 
     // Store chat messages with 30-day expiration (2592000 seconds)

@@ -44,7 +44,8 @@ export async function POST(req: Request) {
     try {
       const c = await groq.chat.completions.create({
         model,
-        max_tokens: 32,
+        max_tokens: 260,
+        reasoning_effort: "low",
         temperature: 0.3,
         messages: [
           {
@@ -56,6 +57,9 @@ export async function POST(req: Request) {
         ],
       });
       let t = (c.choices?.[0]?.message?.content || "").trim();
+      // Reasoning kabhi kabhi pehle sochta hai — aakhri line hi asal title hoti hai.
+      const lines = t.split("\n").map((x) => x.trim()).filter(Boolean);
+      if (lines.length > 1) t = lines[lines.length - 1];
       t = t
         .replace(/^["'`]+|["'`]+$/g, "")
         .replace(/\s+/g, " ")

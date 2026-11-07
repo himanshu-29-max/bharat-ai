@@ -105,36 +105,71 @@ export async function POST(req: Request) {
 
       // Prompt enhancement: chhote / Hinglish input ko detailed English prompt
       // me badlo taaki image ki quality behtar ho. Fail ho to raw prompt chalega.
+      // NOTE: gpt-oss models "reasoning" models hain — chhota max_tokens rakhne
+      // par saare tokens sochne me kharch ho jate hain aur jawab khaali aata
+      // hai. Isiliye pehle OpenRouter ka seedha model, phir bada budget.
       let finalPrompt = promptQuery || cleanMsg;
-      if (groqKey) {
+      const enhancerSystem =
+        "You are an expert image-prompt writer for a text-to-image AI. Rewrite the user's request (any language) into ONE detailed English prompt: subject, appearance, clothing/setting, background, lighting, photorealistic style, ultra detailed. Max 60 words. If the request is only a person's name, describe a generic fictional portrait of an Indian person - never claim it depicts a real person. Output ONLY the prompt text.";
+      const tryEnhance = (txt: string | undefined | null) => {
+        const t = (txt || "").trim();
+        return t.length > 25 && t.toLowerCase() !== finalPrompt.toLowerCase() ? t : "";
+      };
+
+      // 1) OpenRouter — non-reasoning model, tez aur seedha jawab
+      if (openrouterKey) {
+        try {
+          const oRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${openrouterKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: openrouterModel,
+              max_tokens: 220,
+              temperature: 0.7,
+              messages: [
+                { role: "system", content: enhancerSystem },
+                { role: "user", content: finalPrompt },
+              ],
+            }),
+          });
+          const oData = await oRes.json();
+          const ep = tryEnhance(oData?.choices?.[0]?.message?.content);
+          if (ep) finalPrompt = ep;
+        } catch (e) {
+          console.error("Prompt enhance (OpenRouter) failed:", e);
+        }
+      }
+
+      // 2) Groq gpt-oss — bada token budget + low reasoning effort
+      if (finalPrompt === (promptQuery || cleanMsg) && groqKey) {
         try {
           const enhancer = new Groq({ apiKey: groqKey });
           for (const m of [...groqModels].reverse()) {
             try {
               const ec = await enhancer.chat.completions.create({
                 model: m,
-                max_tokens: 140,
+                max_tokens: 700,
                 temperature: 0.7,
+                reasoning_effort: "low",
                 messages: [
-                  {
-                    role: "system",
-                    content:
-                      "You are an expert image-prompt writer for a text-to-image AI. Rewrite the user's request (any language) into ONE detailed English prompt: subject, appearance, clothing/setting, background, lighting, photorealistic style, ultra detailed. Max 60 words. If the request is only a person's name, describe a generic fictional portrait of an Indian person - never claim it depicts a real person. Output ONLY the prompt text.",
-                  },
+                  { role: "system", content: enhancerSystem },
                   { role: "user", content: finalPrompt },
                 ],
-              });
-              const ep = ec.choices?.[0]?.message?.content?.trim();
-              if (ep && ep.length > 10) {
+              } as any);
+              const ep = tryEnhance(ec.choices?.[0]?.message?.content);
+              if (ep) {
                 finalPrompt = ep;
                 break;
               }
-            } catch {
-              /* next model */
+            } catch (e) {
+              console.error("Prompt enhance (Groq) failed:", e);
             }
           }
-        } catch {
-          /* keep the raw prompt */
+        } catch (e) {
+          console.error("Prompt enhance setup failed:", e);
         }
       }
 

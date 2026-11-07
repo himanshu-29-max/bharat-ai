@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/options";
-import { getRedisClient } from "@/lib/redis";
+import { getRedisClient, getRedisConfigError } from "@/lib/redis";
 
 export async function GET(req: Request) {
   try {
@@ -14,7 +14,7 @@ export async function GET(req: Request) {
     const redis = getRedisClient();
     if (!redis) {
       return NextResponse.json(
-        { error: "Redis database connection not configured on server (UPSTASH_REDIS_REST_URL missing)." },
+        { error: getRedisConfigError() || "Redis database connection not configured on server." },
         { status: 500 }
       );
     }
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
     const redis = getRedisClient();
     if (!redis) {
       return NextResponse.json(
-        { error: "Redis database connection not configured on server (UPSTASH_REDIS_REST_URL missing)." },
+        { error: getRedisConfigError() || "Redis database connection not configured on server." },
         { status: 500 }
       );
     }
@@ -104,7 +104,7 @@ export async function DELETE(req: Request) {
     const email = session.user.email.toLowerCase();
     const redis = getRedisClient();
     if (!redis) {
-      return NextResponse.json({ error: "Redis database connection missing" }, { status: 500 });
+      return NextResponse.json({ error: getRedisConfigError() || "Redis database connection missing" }, { status: 500 });
     }
 
     const { chatId } = await req.json();

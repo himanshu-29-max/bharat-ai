@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { groqModelChain, geminiModelChain } from "@/lib/models";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/options";
 import { getRedisClient } from "@/lib/redis";
@@ -89,7 +90,7 @@ export async function GET() {
   let groqStatus = "Missing";
   let groqError: string | null = null;
   const groqKey = process.env.GROQ_API_KEY?.trim();
-  const groqModel = process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  const groqModel = groqModelChain(process.env.GROQ_MODEL)[0];
   if (groqKey) {
     try {
       const groq = new Groq({ apiKey: groqKey });
@@ -108,7 +109,7 @@ export async function GET() {
   let geminiStatus = "Missing";
   let geminiError: string | null = null;
   const geminiKey = process.env.GEMINI_API_KEY?.trim();
-  const geminiModel = process.env.GEMINI_MODEL?.trim() || "gemini-1.5-flash";
+  const geminiModel = geminiModelChain(process.env.GEMINI_MODEL)[0];
   if (geminiKey) {
     try {
       const genAI = new GoogleGenerativeAI(geminiKey);

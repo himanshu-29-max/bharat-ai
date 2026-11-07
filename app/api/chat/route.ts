@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Groq } from "groq-sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { groqModelChain, geminiModelChain } from "@/lib/models";
 
 // Explicit image generation intent (command + target)
 function isExplicitImagePrompt(text: string): boolean {
@@ -58,10 +59,15 @@ export async function POST(req: Request) {
     } = await req.json();
 
     const groqKey = process.env.GROQ_API_KEY?.trim();
-    const groqModel = process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+    const groqModels = groqModelChain(process.env.GROQ_MODEL);
 
     const geminiKey = process.env.GEMINI_API_KEY?.trim();
-    const geminiModel = process.env.GEMINI_MODEL?.trim() || "gemini-1.5-flash";
+    const geminiModels = geminiModelChain(process.env.GEMINI_MODEL);
+
+    // Optional FREE alternative provider (OpenRouter) — third fallback, only if key set
+    const openrouterKey = process.env.OPENROUTER_API_KEY?.trim();
+    const openrouterModel =
+      process.env.OPENROUTER_MODEL?.trim() || "meta-llama/llama-3.3-70b-instruct:free";
 
     const tavilyKey = process.env.TAVILY_API_KEY?.trim();
     const serperKey = process.env.SERPER_API_KEY?.trim();
@@ -160,7 +166,6 @@ export async function POST(req: Request) {
 
       try {
         const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({ model: geminiModel });
 
         const parts: any[] = [];
         const questionPrompt = cleanMsg || "Kripya is document ya image ko dhyan se padh kar analyze karein aur iska mukhy vivaran dein.";
@@ -214,15 +219,28 @@ export async function POST(req: Request) {
 
         parts.push(questionPrompt);
 
-        const result = await model.generateContent(parts);
-        const answer = result.response.text();
+        let answer = "";
+        let analyzeError: any = null;
+        for (const m of geminiModels) {
+          try {
+            const model = genAI.getGenerativeModel({ model: m });
+            const result = await model.generateContent(parts);
+            answer = result.response.text();
+            if (answer) break;
+          } catch (modelErr: any) {
+            console.error(`Gemini analyze model ${m} failed:`, modelErr.message);
+            analyzeError = modelErr;
+          }
+        }
+        if (!answer) throw analyzeError || new Error("Gemini returned an empty analysis");
 
         return NextResponse.json({ reply: answer });
       } catch (err: any) {
         console.error("Gemini Analysis error:", err);
         return NextResponse.json(
           {
-            reply: `Analyze karte waqt samasya aayi / model error: ${err.message || String(err)}`,
+            reply:
+              "Analyze nahi ho paya — AI model service abhi available nahi hai. Thodi der baad phir try karo.",
             error: err.message,
           },
           { status: 502 }
@@ -306,35 +324,91 @@ Provide complete sentences without cutting off mid-way.`;
           },
         ];
 
-        const completion = await groq.chat.completions.create({
-          model: groqModel,
-          messages: messagesPayload,
-          max_tokens: 1500,
-          temperature: 0.3,
-        });
-
-        reply = completion.choices?.[0]?.message?.content?.trim() || "";
+        for (const m of groqModels) {
+          try {
+            const completion = await groq.chat.completions.create({
+              model: m,
+              messages: messagesPayload,
+              max_tokens: 1500,
+              temperature: 0.3,
+            });
+            reply = completion.choices?.[0]?.message?.content?.trim() || "";
+            if (reply) {
+              console.log(`Groq chat OK with model: ${m}`);
+              break;
+            }
+          } catch (modelErr: any) {
+            console.error(`Groq model ${m} failed:`, modelErr.message);
+            lastError = `Groq (${m}): ${modelErr.message}`;
+          }
+        }
       } catch (e: any) {
         console.error("Primary Groq failure:", e.message);
         lastError = `Groq Error: ${e.message}`;
       }
     }
 
-    // B. Secondary Fallback: Google Gemini
+    // B. Secondary Fallback: Google Gemini (model chain)
     if (!reply && geminiKey) {
+      const genAI = new GoogleGenerativeAI(geminiKey);
+      const geminiPrompt = `${systemPrompt}\n\n${
+        searchContext ? `Web Context:\n${searchContext}\n\n` : ""
+      }User Query: ${cleanMsg}`;
+
+      for (const m of geminiModels) {
+        try {
+          const model = genAI.getGenerativeModel({ model: m });
+          const gRes = await model.generateContent(geminiPrompt);
+          reply = gRes.response.text().trim();
+          if (reply) {
+            console.log(`Gemini chat OK with model: ${m}`);
+            break;
+          }
+        } catch (e: any) {
+          console.error(`Gemini model ${m} failed:`, e.message);
+          lastError = `${lastError ? lastError + " | " : ""}Gemini (${m}): ${e.message}`;
+        }
+      }
+    }
+
+    // C. Third Fallback: OpenRouter (free models) — only when OPENROUTER_API_KEY is set
+    if (!reply && openrouterKey) {
       try {
-        const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({ model: geminiModel });
-
-        const geminiPrompt = `${systemPrompt}\n\n${
-          searchContext ? `Web Context:\n${searchContext}\n\n` : ""
-        }User Query: ${cleanMsg}`;
-
-        const gRes = await model.generateContent(geminiPrompt);
-        reply = gRes.response.text().trim();
+        const orRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${openrouterKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": process.env.NEXTAUTH_URL || "https://bharat-ai-zeta.vercel.app",
+            "X-Title": "Bharat AI",
+          },
+          body: JSON.stringify({
+            model: openrouterModel,
+            messages: [
+              { role: "system", content: systemPrompt },
+              {
+                role: "user",
+                content: searchContext
+                  ? `Live Web Context:\n${searchContext}\n\nQuestion: ${cleanMsg}`
+                  : cleanMsg,
+              },
+            ],
+            max_tokens: 1500,
+            temperature: 0.3,
+          }),
+        });
+        const orData = await orRes.json();
+        reply = orData.choices?.[0]?.message?.content?.trim() || "";
+        if (!reply) {
+          lastError = `${lastError ? lastError + " | " : ""}OpenRouter (${openrouterModel}): ${
+            orData.error?.message || `HTTP ${orRes.status}`
+          }`;
+        } else {
+          console.log(`OpenRouter chat OK with model: ${openrouterModel}`);
+        }
       } catch (e: any) {
-        console.error("Fallback Gemini failure:", e.message);
-        lastError = `${lastError ? lastError + " | " : ""}Gemini Error: ${e.message}`;
+        console.error("OpenRouter failure:", e.message);
+        lastError = `${lastError ? lastError + " | " : ""}OpenRouter: ${e.message}`;
       }
     }
 
@@ -344,7 +418,8 @@ Provide complete sentences without cutting off mid-way.`;
       return NextResponse.json(
         {
           error: errorReason,
-          reply: `Server se jawab nahi aaya — ${errorReason}`,
+          reply:
+            "Server se jawab nahi aaya — AI service abhi busy/down hai. Thodi der baad Retry dabakar phir try karo.",
         },
         { status: 502 }
       );
@@ -356,7 +431,7 @@ Provide complete sentences without cutting off mid-way.`;
     return NextResponse.json(
       {
         error: err.message || "Unknown error",
-        reply: `Server se jawab nahi aaya — ${err.message || "Internal server error"}`,
+        reply: "Server me kuch gadbad ho gayi hai. Thodi der baad phir try karo.",
       },
       { status: 500 }
     );

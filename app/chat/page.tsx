@@ -715,7 +715,7 @@ export default function ChatPage() {
 
             <div className="text-center mt-2">
               <span className="text-[10px] text-white/30">
-                Bharat AI by Himanshu Ranjan (Sandip University) &nbsp;|&nbsp; Multilingual &amp; Multimodal
+                Bharat AI by Himanshu Ranjan &nbsp;|&nbsp; Multilingual &amp; Multimodal
               </span>
             </div>
           </div>

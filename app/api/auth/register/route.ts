@@ -6,7 +6,15 @@ import { UserAccount } from "@/app/api/auth/options";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, email, password } = body;
+    const { name, email, password, acceptedTerms, termsVersion, marketingOptIn } = body;
+
+    // Enforce consent on server
+    if (acceptedTerms !== true) {
+      return NextResponse.json(
+        { error: "Aage badhne ke liye Terms aur Privacy Policy par tick karo." },
+        { status: 400 }
+      );
+    }
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       return NextResponse.json(
@@ -52,13 +60,23 @@ export async function POST(req: Request) {
     const passwordHash = await bcrypt.hash(password, 10);
     const isAdmin = isUserAdmin(cleanEmail);
 
+    const existingProviders = Array.isArray(existing?.providers) ? existing!.providers : [];
+    const providers = Array.from(new Set([...existingProviders, "credentials"]));
+
     const newUser: UserAccount = {
       name: name.trim(),
       email: cleanEmail,
       passwordHash,
-      role: isAdmin ? "admin" : "user",
+      role: isAdmin ? "admin" : (existing?.role || "user"),
+      providers,
       createdAt: existing?.createdAt || Date.now(),
       lastLoginAt: Date.now(),
+      consent: {
+        acceptedTerms: true,
+        termsVersion: termsVersion || "v1",
+        acceptedAt: new Date().toISOString(),
+      },
+      marketingOptIn: !!marketingOptIn,
     };
 
     await redis.set(userKey, newUser);
@@ -80,4 +98,3 @@ export async function POST(req: Request) {
     );
   }
 }
-

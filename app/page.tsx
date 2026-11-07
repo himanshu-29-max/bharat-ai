@@ -131,9 +131,8 @@ export default function LandingPage() {
                 About Bharat AI
               </h2>
               <p className="text-white/70 text-sm sm:text-base leading-relaxed mb-4">
-                Bharat AI is an ambitious, full-stack artificial intelligence platform built by{" "}
-                <strong className="text-white font-semibold">Himanshu Ranjan</strong>, a Computer Science and Engineering (B.Tech CSE) student at{" "}
-                <strong className="text-white font-semibold">Sandip University</strong>.
+                Bharat AI is an ambitious, full-stack artificial intelligence platform created by{" "}
+                <strong className="text-white font-semibold">Himanshu Ranjan</strong> — a B.Tech Computer Science student and developer from India.
               </p>
               <p className="text-white/60 text-sm sm:text-base leading-relaxed mb-6">
                 Most international AI chatbots struggle with genuine Indian context, dialect nuances, and multilingual queries (Hindi, Hinglish, regional tech queries). Bharat AI was engineered to bridge this gap by bringing together low-latency cloud models (Groq LLaMA, Google Gemini 1.5/2.5), multimodal PDF/image inspection, real-time search indexing, and resilient serverless persistence under one elegant experience.
@@ -145,8 +144,8 @@ export default function LandingPage() {
                   <div className="font-semibold text-white mt-0.5">Himanshu Ranjan</div>
                 </div>
                 <div>
-                  <div className="text-white/40">Institution</div>
-                  <div className="font-semibold text-white mt-0.5">Sandip University</div>
+                  <div className="text-white/40">Role</div>
+                  <div className="font-semibold text-white mt-0.5">Founder &amp; Developer</div>
                 </div>
                 <div>
                   <div className="text-white/40">Discipline</div>
@@ -362,7 +361,7 @@ export default function LandingPage() {
                 Bharat AI kisne banaya hai?
               </h3>
               <p className="text-xs sm:text-sm text-white/60 leading-relaxed">
-                Bharat AI ko Himanshu Ranjan ne develop kiya hai, jo Sandip University ke B.Tech Computer Science and Engineering (CSE) ke vidyarthi hain.
+                Bharat AI ko Himanshu Ranjan ne develop kiya hai — jo India ke ek passionate B.Tech Computer Science and Engineering (CSE) ke student aur developer hain.
               </p>
             </div>
           </div>

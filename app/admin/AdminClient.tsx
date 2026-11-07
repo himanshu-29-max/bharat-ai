@@ -15,7 +15,7 @@ import {
   AlertTriangle,
   XCircle,
   Clock,
-  ArrowUpRight
+  ExternalLink
 } from "lucide-react";
 
 interface AdminClientProps {
@@ -30,11 +30,13 @@ export default function AdminClient({ user }: AdminClientProps) {
   const [statsData, setStatsData] = useState<any>(null);
   const [usersData, setUsersData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
+    setErrorBanner(null);
     try {
       const [resStats, resUsers] = await Promise.all([
         fetch("/api/admin/stats"),
@@ -44,13 +46,20 @@ export default function AdminClient({ user }: AdminClientProps) {
       if (resStats.ok) {
         const stats = await resStats.json();
         setStatsData(stats);
+        if (stats.health?.redis !== "OK") {
+          setErrorBanner(`Admin data load nahi ho paya: Redis ${stats.health?.redis || "error"} (${stats.health?.redisError || "Credentials check karein"})`);
+        }
+      } else {
+        const err = await resStats.json().catch(() => ({}));
+        setErrorBanner(`Admin data load nahi ho paya: ${err.error || `HTTP ${resStats.status}`}`);
       }
+
       if (resUsers.ok) {
         const u = await resUsers.json();
         setUsersData(u.users || []);
       }
     } catch (e: any) {
-      setMessage({ type: "error", text: "Data load nahi ho saka." });
+      setErrorBanner(`Admin data load nahi ho paya: ${e.message || "Network error"}`);
     } finally {
       setLoading(false);
     }
@@ -105,7 +114,7 @@ export default function AdminClient({ user }: AdminClientProps) {
     }
   };
 
-  const getHealthBadge = (status?: string) => {
+  const getHealthBadge = (status?: string, detail?: string) => {
     if (status === "OK") {
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
@@ -115,14 +124,17 @@ export default function AdminClient({ user }: AdminClientProps) {
     }
     if (status === "Failing") {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/30">
-          <XCircle size={12} /> Failing
+        <span
+          title={detail}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/30 cursor-help"
+        >
+          <XCircle size={12} /> FAILING
         </span>
       );
     }
     return (
       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-white/5 text-white/40 border border-white/10">
-        <AlertTriangle size={12} /> Missing
+        <AlertTriangle size={12} /> MISSING
       </span>
     );
   };
@@ -170,6 +182,17 @@ export default function AdminClient({ user }: AdminClientProps) {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10 space-y-8">
+        {/* Error Banner for Unreachable/Misconfigured Redis */}
+        {errorBanner && (
+          <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-sm flex items-start gap-3 shadow-lg">
+            <XCircle size={18} className="flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold mb-0.5">Database Warning</p>
+              <p className="text-xs text-rose-300/80">{errorBanner}</p>
+            </div>
+          </div>
+        )}
+
         {message && (
           <div
             className={`p-4 rounded-2xl text-xs sm:text-sm border flex items-center justify-between ${
@@ -193,10 +216,10 @@ export default function AdminClient({ user }: AdminClientProps) {
               <Users size={16} className="text-[#FF9933]" />
             </div>
             <div className="text-2xl sm:text-3xl font-extrabold text-white">
-              {statsData?.stats?.totalUsers ?? "—"}
+              {statsData?.health?.redis === "OK" ? statsData?.stats?.totalUsers : "BLOCKED"}
             </div>
             <div className="text-[11px] text-white/40 mt-1">
-              +{statsData?.stats?.newSignupsToday ?? 0} today &nbsp;|&nbsp; +{statsData?.stats?.newSignupsThisWeek ?? 0} this week
+              {statsData?.health?.redis === "OK" ? `+${statsData?.stats?.newSignupsToday ?? 0} today` : "Redis unconfigured"}
             </div>
           </div>
 
@@ -206,9 +229,11 @@ export default function AdminClient({ user }: AdminClientProps) {
               <MessageSquare size={16} className="text-blue-400" />
             </div>
             <div className="text-2xl sm:text-3xl font-extrabold text-white">
-              {statsData?.stats?.totalChats ?? "—"}
+              {statsData?.health?.redis === "OK" ? statsData?.stats?.totalChats : "BLOCKED"}
             </div>
-            <div className="text-[11px] text-white/40 mt-1">Saved across accounts</div>
+            <div className="text-[11px] text-white/40 mt-1">
+              {statsData?.health?.redis === "OK" ? "Saved across accounts" : "Redis unconfigured"}
+            </div>
           </div>
 
           <div className="glass-card p-5">
@@ -217,9 +242,11 @@ export default function AdminClient({ user }: AdminClientProps) {
               <Activity size={16} className="text-emerald-400" />
             </div>
             <div className="text-2xl sm:text-3xl font-extrabold text-white">
-              {statsData?.stats?.totalMessages ?? "—"}
+              {statsData?.health?.redis === "OK" ? statsData?.stats?.totalMessages : "BLOCKED"}
             </div>
-            <div className="text-[11px] text-white/40 mt-1">User &amp; AI exchanges</div>
+            <div className="text-[11px] text-white/40 mt-1">
+              {statsData?.health?.redis === "OK" ? "User & AI exchanges" : "Redis unconfigured"}
+            </div>
           </div>
 
           <div className="glass-card p-5">
@@ -228,9 +255,11 @@ export default function AdminClient({ user }: AdminClientProps) {
               <Sparkles size={16} className="text-purple-400" />
             </div>
             <div className="text-2xl sm:text-3xl font-extrabold text-white">
-              {statsData?.stats?.totalImages ?? "—"}
+              {statsData?.health?.redis === "OK" ? statsData?.stats?.totalImages : "BLOCKED"}
             </div>
-            <div className="text-[11px] text-white/40 mt-1">Via Pollinations Flux</div>
+            <div className="text-[11px] text-white/40 mt-1">
+              {statsData?.health?.redis === "OK" ? "Pollinations Flux" : "Redis unconfigured"}
+            </div>
           </div>
 
           <div className="glass-card p-5 col-span-2 lg:col-span-1">
@@ -239,9 +268,11 @@ export default function AdminClient({ user }: AdminClientProps) {
               <Clock size={16} className="text-amber-400" />
             </div>
             <div className="text-2xl sm:text-3xl font-extrabold text-white">
-              {statsData?.stats?.newSignupsThisWeek ?? "—"}
+              {statsData?.health?.redis === "OK" ? statsData?.stats?.newSignupsThisWeek : "BLOCKED"}
             </div>
-            <div className="text-[11px] text-white/40 mt-1">Weekly user growth</div>
+            <div className="text-[11px] text-white/40 mt-1">
+              {statsData?.health?.redis === "OK" ? "Weekly growth" : "Redis unconfigured"}
+            </div>
           </div>
         </section>
 
@@ -249,7 +280,7 @@ export default function AdminClient({ user }: AdminClientProps) {
         <section className="glass-card p-6">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-white/70 mb-4 flex items-center gap-2">
             <Activity size={16} className="text-[#FF9933]" />
-            System Health &amp; Provider Status
+            System Health &amp; Real-time Provider Diagnostics
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
             <div className="glass p-3.5 rounded-xl flex items-center justify-between">
@@ -257,7 +288,7 @@ export default function AdminClient({ user }: AdminClientProps) {
                 <div className="font-semibold text-white/90">Upstash Redis</div>
                 <div className="text-white/40 text-[11px]">Database &amp; History</div>
               </div>
-              {getHealthBadge(statsData?.health?.redis)}
+              {getHealthBadge(statsData?.health?.redis, statsData?.health?.redisError)}
             </div>
 
             <div className="glass p-3.5 rounded-xl flex items-center justify-between">
@@ -265,7 +296,7 @@ export default function AdminClient({ user }: AdminClientProps) {
                 <div className="font-semibold text-white/90">Groq SDK</div>
                 <div className="text-white/40 text-[11px] font-mono">{statsData?.health?.groqModel || "Groq"}</div>
               </div>
-              {getHealthBadge(statsData?.health?.groq)}
+              {getHealthBadge(statsData?.health?.groq, statsData?.health?.groqError)}
             </div>
 
             <div className="glass p-3.5 rounded-xl flex items-center justify-between">
@@ -273,7 +304,7 @@ export default function AdminClient({ user }: AdminClientProps) {
                 <div className="font-semibold text-white/90">Google Gemini</div>
                 <div className="text-white/40 text-[11px] font-mono">{statsData?.health?.geminiModel || "Gemini"}</div>
               </div>
-              {getHealthBadge(statsData?.health?.gemini)}
+              {getHealthBadge(statsData?.health?.gemini, statsData?.health?.geminiError)}
             </div>
 
             <div className="glass p-3.5 rounded-xl flex items-center justify-between">
@@ -319,68 +350,92 @@ export default function AdminClient({ user }: AdminClientProps) {
                 <tr>
                   <th className="py-3 px-3">User</th>
                   <th className="py-3 px-3">Role</th>
+                  <th className="py-3 px-3">Providers</th>
                   <th className="py-3 px-3">Chats</th>
                   <th className="py-3 px-3">Registered</th>
-                  <th className="py-3 px-3">Last Active</th>
+                  <th className="py-3 px-3">Terms Consent</th>
                   <th className="py-3 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {usersData.map((u) => {
-                  const isCurrent = u.email?.toLowerCase() === user.email?.toLowerCase();
-                  return (
-                    <tr key={u.email} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="py-3 px-3">
-                        <div className="font-medium text-white/90">{u.name}</div>
-                        <div className="text-[11px] text-white/40">{u.email}</div>
-                      </td>
-                      <td className="py-3 px-3">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
-                            u.role === "admin"
-                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                              : "bg-white/5 text-white/50 border border-white/10"
-                          }`}
-                        >
-                          {u.role}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-white/80">{u.chatCount}</td>
-                      <td className="py-3 px-3 text-white/50">
-                        {u.createdAt ? new Date(u.createdAt).toLocaleDateString("en-IN") : "—"}
-                      </td>
-                      <td className="py-3 px-3 text-white/50">
-                        {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString("en-IN") : "—"}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <div className="inline-flex items-center gap-1.5">
-                          <button
-                            onClick={() => handleRoleToggle(u.email, u.role)}
-                            disabled={actionLoading === u.email || isCurrent}
-                            title={isCurrent ? "Aap khud ka role change nahi kar sakte" : "Role Toggle"}
-                            className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-[11px]"
+                {usersData.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-6 text-center text-white/30 text-xs">
+                      {statsData?.health?.redis !== "OK" ? "Redis is not connected. User records cannot be listed." : "No registered users found."}
+                    </td>
+                  </tr>
+                ) : (
+                  usersData.map((u) => {
+                    const isCurrent = u.email?.toLowerCase() === user.email?.toLowerCase();
+                    return (
+                      <tr key={u.email} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="py-3 px-3">
+                          <div className="font-medium text-white/90">{u.name}</div>
+                          <div className="text-[11px] text-white/40">{u.email}</div>
+                        </td>
+                        <td className="py-3 px-3">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                              u.role === "admin"
+                                ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                : "bg-white/5 text-white/50 border border-white/10"
+                            }`}
                           >
-                            {u.role === "admin" ? "Make User" : "Make Admin"}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteUser(u.email)}
-                            disabled={actionLoading === u.email || isCurrent}
-                            title={isCurrent ? "Aap khud ka account delete nahi kar sakte" : "Delete Account"}
-                            className="p-1 rounded-lg text-white/30 hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                            {u.role}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex flex-wrap gap-1">
+                            {(u.providers || ["credentials"]).map((p: string) => (
+                              <span key={p} className="px-1.5 py-0.5 rounded bg-white/5 text-[10px] text-white/60">
+                                {p}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-white/80">{u.chatCount}</td>
+                        <td className="py-3 px-3 text-white/50">
+                          {u.createdAt ? new Date(u.createdAt).toLocaleDateString("en-IN") : "—"}
+                        </td>
+                        <td className="py-3 px-3 text-white/50">
+                          {u.consent ? (
+                            <span className="text-emerald-400 flex items-center gap-1 text-[11px]">
+                              <CheckCircle2 size={11} /> {u.consent.termsVersion}
+                            </span>
+                          ) : (
+                            <span className="text-white/30 text-[11px]">Pre-consent</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleRoleToggle(u.email, u.role)}
+                              disabled={actionLoading === u.email || isCurrent}
+                              title={isCurrent ? "Aap khud ka role change nahi kar sakte" : "Role Toggle"}
+                              className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-[11px]"
+                            >
+                              {u.role === "admin" ? "Make User" : "Make Admin"}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteUser(u.email)}
+                              disabled={actionLoading === u.email || isCurrent}
+                              title={isCurrent ? "Aap khud ka account delete nahi kar sakte" : "Delete Account"}
+                              className="p-1 rounded-lg text-white/30 hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
         </section>
 
-        {/* 4. Recent Activity Metadata */}
+        {/* 4. Recent Activity Metadata (Metadata Only) */}
         <section className="glass-card p-6">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-white/70 mb-1">
             Recent Chat Activity (Latest 20)
@@ -391,7 +446,9 @@ export default function AdminClient({ user }: AdminClientProps) {
 
           <div className="space-y-2">
             {(statsData?.recentChats || []).length === 0 ? (
-              <div className="text-xs text-white/30 py-6 text-center">Koi chat activity nahi mili.</div>
+              <div className="text-xs text-white/30 py-6 text-center">
+                {statsData?.health?.redis !== "OK" ? "Redis connection missing." : "Koi chat activity nahi mili."}
+              </div>
             ) : (
               (statsData?.recentChats || []).map((chat: any) => (
                 <div
@@ -417,4 +474,3 @@ export default function AdminClient({ user }: AdminClientProps) {
     </div>
   );
 }
-

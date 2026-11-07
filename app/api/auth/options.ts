@@ -1,5 +1,8 @@
 import { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import GithubProvider from "next-auth/providers/github";
+import AzureADProvider from "next-auth/providers/azure-ad";
+import AppleProvider from "next-auth/providers/apple";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { getRedisClient, isUserAdmin } from "@/lib/redis";
@@ -9,8 +12,15 @@ export interface UserAccount {
   email: string;
   passwordHash?: string;
   role: "user" | "admin";
+  providers?: string[];
   createdAt: number;
   lastLoginAt: number;
+  consent?: {
+    acceptedTerms: boolean;
+    termsVersion: string;
+    acceptedAt: string;
+  };
+  marketingOptIn?: boolean;
 }
 
 export const authOptions: NextAuthOptions = {
@@ -20,6 +30,31 @@ export const authOptions: NextAuthOptions = {
           GoogleProvider({
             clientId: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+          }),
+        ]
+      : []),
+    ...(process.env.GITHUB_ID && process.env.GITHUB_SECRET
+      ? [
+          GithubProvider({
+            clientId: process.env.GITHUB_ID,
+            clientSecret: process.env.GITHUB_SECRET,
+          }),
+        ]
+      : []),
+    ...(process.env.AZURE_AD_CLIENT_ID && process.env.AZURE_AD_CLIENT_SECRET
+      ? [
+          AzureADProvider({
+            clientId: process.env.AZURE_AD_CLIENT_ID,
+            clientSecret: process.env.AZURE_AD_CLIENT_SECRET,
+            tenantId: process.env.AZURE_AD_TENANT_ID || "common",
+          }),
+        ]
+      : []),
+    ...(process.env.APPLE_ID && process.env.APPLE_SECRET
+      ? [
+          AppleProvider({
+            clientId: process.env.APPLE_ID,
+            clientSecret: process.env.APPLE_SECRET,
           }),
         ]
       : []),
@@ -81,11 +116,13 @@ export const authOptions: NextAuthOptions = {
   },
   pages: {
     signIn: "/login",
+    error: "/login",
   },
   callbacks: {
     async signIn({ user, account }) {
-      if (account?.provider === "google" && user.email) {
+      if (account?.provider && account.provider !== "credentials" && user.email) {
         const email = user.email.toLowerCase();
+        const providerName = account.provider;
         const redis = getRedisClient();
         if (redis) {
           try {
@@ -94,18 +131,29 @@ export const authOptions: NextAuthOptions = {
             const isAdmin = existing?.role === "admin" || isUserAdmin(email);
             const resolvedRole = isAdmin ? "admin" : "user";
 
+            const existingProviders = Array.isArray(existing?.providers) ? existing!.providers : [];
+            const providers = Array.from(new Set([...existingProviders, providerName]));
+
             const updatedUser: UserAccount = {
               name: user.name || existing?.name || email.split("@")[0],
               email,
+              passwordHash: existing?.passwordHash, // NEVER overwrite existing passwordHash
               role: resolvedRole,
+              providers,
               createdAt: existing?.createdAt || Date.now(),
               lastLoginAt: Date.now(),
+              consent: existing?.consent || {
+                acceptedTerms: true,
+                termsVersion: "v1-oauth",
+                acceptedAt: new Date().toISOString(),
+              },
+              marketingOptIn: existing?.marketingOptIn ?? false,
             };
 
             await redis.set(userKey, updatedUser);
             await redis.sadd("admin:all-user-emails", email);
           } catch (err) {
-            console.error("Failed to sync Google user to Redis:", err);
+            console.error(`Failed to upsert ${providerName} user to Redis:`, err);
           }
         }
       }
@@ -114,27 +162,36 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = (user as any).role || (isUserAdmin(user.email) ? "admin" : "user");
-      } else if (token.email) {
-        // Refresh role on token verify
-        const redis = getRedisClient();
-        let storedRole = token.role;
-        if (redis && token.email) {
-          try {
-            const u = await redis.get<UserAccount>(`user-account:${token.email.toLowerCase()}`);
-            if (u?.role) storedRole = u.role;
-          } catch (e) {
-            // fallback
+      }
+      // Recompute role on EVERY token load from ADMIN_EMAILS and Redis
+      if (token.email) {
+        const cleanEmail = token.email.toLowerCase();
+        if (isUserAdmin(cleanEmail)) {
+          token.role = "admin";
+        } else {
+          const redis = getRedisClient();
+          let storedRole = "user";
+          if (redis) {
+            try {
+              const u = await redis.get<UserAccount>(`user-account:${cleanEmail}`);
+              if (u?.role) storedRole = u.role;
+            } catch (e) {
+              // fallback
+            }
           }
+          token.role = storedRole === "admin" ? "admin" : "user";
         }
-        token.role = isUserAdmin(token.email) || storedRole === "admin" ? "admin" : "user";
+      } else {
+        token.role = "user";
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
         (session.user as any).id = token.id || token.sub;
-        (session.user as any).role = token.role || (isUserAdmin(session.user.email) ? "admin" : "user");
+        const email = session.user.email?.toLowerCase();
+        // Dynamically reflect current admin state on session
+        (session.user as any).role = isUserAdmin(email) || token.role === "admin" ? "admin" : "user";
       }
       return session;
     },

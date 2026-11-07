@@ -14,7 +14,7 @@ export async function GET() {
 
   const redis = getRedisClient();
   if (!redis) {
-    return NextResponse.json({ error: "Redis connection failed" }, { status: 500 });
+    return NextResponse.json({ error: "Redis connection not configured" }, { status: 500 });
   }
 
   try {
@@ -30,9 +30,12 @@ export async function GET() {
       users.push({
         name: u?.name || email.split("@")[0],
         email: email,
-        role: u?.role || (isUserAdmin(email) ? "admin" : "user"),
+        role: isUserAdmin(email) ? "admin" : (u?.role || "user"),
+        providers: u?.providers || ["credentials"],
         createdAt: u?.createdAt || null,
         lastLoginAt: u?.lastLoginAt || null,
+        consent: u?.consent || null,
+        marketingOptIn: !!u?.marketingOptIn,
         chatCount: Array.isArray(chats) ? chats.length : 0,
       });
     }
@@ -69,12 +72,25 @@ export async function POST(req: Request) {
 
     const email = targetEmail.trim().toLowerCase();
 
+    // Check count of remaining admins
+    const emailMembers = await redis.smembers("admin:all-user-emails");
+    const allEmails = Array.isArray(emailMembers) ? emailMembers : [];
+    let adminCount = 0;
+    for (const em of allEmails) {
+      if (isUserAdmin(em)) {
+        adminCount++;
+      } else {
+        const u = await redis.get<UserAccount>(`user-account:${em}`);
+        if (u?.role === "admin") adminCount++;
+      }
+    }
+
     if (action === "update-role") {
       if (newRole !== "user" && newRole !== "admin") {
         return NextResponse.json({ error: "Invalid role specified" }, { status: 400 });
       }
 
-      // Safeguard: Cannot demote yourself
+      // Safeguard 1: Cannot demote yourself
       if (email === currentAdminEmail && newRole === "user") {
         return NextResponse.json(
           { error: "Aap khud ko demote nahi kar sakte." },
@@ -82,10 +98,18 @@ export async function POST(req: Request) {
         );
       }
 
-      // Safeguard: Cannot demote if email is configured in ADMIN_EMAILS
+      // Safeguard 2: Cannot demote if email is in ADMIN_EMAILS
       if (isUserAdmin(email) && newRole === "user") {
         return NextResponse.json(
-          { error: "Ye user ADMIN_EMAILS env me config hai, ise demote nahi kiya ja sakta." },
+          { error: "Ye user ADMIN_EMAILS env variable me listed hai, ise demote nahi kiya ja sakta." },
+          { status: 400 }
+        );
+      }
+
+      // Safeguard 3: Cannot demote the last remaining admin
+      if (adminCount <= 1 && newRole === "user") {
+        return NextResponse.json(
+          { error: "Aap aakhri remaining admin ko demote nahi kar sakte." },
           { status: 400 }
         );
       }
@@ -103,7 +127,7 @@ export async function POST(req: Request) {
 
       return NextResponse.json({ success: true, message: `Role updated to ${newRole}` });
     } else if (action === "delete-user") {
-      // Safeguard: Cannot delete yourself
+      // Safeguard 1: Cannot delete yourself
       if (email === currentAdminEmail) {
         return NextResponse.json(
           { error: "Aap apna khud ka account delete nahi kar sakte." },
@@ -111,10 +135,19 @@ export async function POST(req: Request) {
         );
       }
 
-      // Safeguard: Cannot delete primary admin from env
+      // Safeguard 2: Cannot delete primary admin from env
       if (isUserAdmin(email)) {
         return NextResponse.json(
           { error: "Environment variable me set admin ko delete nahi kiya ja sakta." },
+          { status: 400 }
+        );
+      }
+
+      // Safeguard 3: Cannot delete the last remaining admin
+      const targetUser = await redis.get<UserAccount>(`user-account:${email}`);
+      if (targetUser?.role === "admin" && adminCount <= 1) {
+        return NextResponse.json(
+          { error: "Aap aakhri remaining admin ko delete nahi kar sakte." },
           { status: 400 }
         );
       }
@@ -142,4 +175,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
-

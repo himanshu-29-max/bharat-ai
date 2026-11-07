@@ -16,7 +16,7 @@ export function Footer() {
           <div>
             <span className="font-bold text-base tricolour-text">Bharat AI</span>
             <p className="text-xs text-white/40 mt-0.5">
-              Developed by <strong className="text-white/70">Himanshu Ranjan</strong> (B.Tech CSE, Sandip University)
+              Developed by <strong className="text-white/70">Himanshu Ranjan</strong> — B.Tech Computer Science student &amp; developer
             </p>
           </div>
         </div>
@@ -25,8 +25,10 @@ export function Footer() {
           <Link href="/chat" className="hover:text-white transition-colors">Chat</Link>
           <Link href="/login" className="hover:text-white transition-colors">Sign In</Link>
           <Link href="/signup" className="hover:text-white transition-colors">Sign Up</Link>
-          <a href="#features" className="hover:text-white transition-colors">Features</a>
-          <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
+          <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
+          <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
+          <a href="/#features" className="hover:text-white transition-colors">Features</a>
+          <a href="/#faq" className="hover:text-white transition-colors">FAQ</a>
         </div>
 
         <p className="text-xs text-white/30 text-center md:text-right">
@@ -36,4 +38,3 @@ export function Footer() {
     </footer>
   );
 }
-

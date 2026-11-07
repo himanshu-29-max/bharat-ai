@@ -4,8 +4,8 @@ import Providers from "./providers";
 
 export const metadata: Metadata = {
   title: "Bharat AI (भारत AI) — India Ka Apna All-in-One AI Assistant",
-  description: "Bharat AI is an Indian AI assistant built by Himanshu Ranjan (Sandip University) featuring fast multilingual chat, live web search, document and vision analysis, image generation, and cloud history.",
-  keywords: ["Bharat AI", "Indian AI", "Hinglish AI", "AI Assistant", "Himanshu Ranjan", "Sandip University"],
+  description: "Bharat AI is an Indian AI assistant built by Himanshu Ranjan featuring fast multilingual chat, live web search, document and vision analysis, image generation, and cloud history.",
+  keywords: ["Bharat AI", "Indian AI", "Hinglish AI", "AI Assistant", "Himanshu Ranjan", "Indian Developer"],
   authors: [{ name: "Himanshu Ranjan" }],
   openGraph: {
     title: "Bharat AI — India Ka Apna AI Assistant",
